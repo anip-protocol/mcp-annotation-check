@@ -1,0 +1,8 @@
+server: fake
+version: "0"
+allowlist: []
+repositories:
+  write: owner/write-repo
+  read: owner/read-repo
+standard_read_only_fields: []
+tools: {}
