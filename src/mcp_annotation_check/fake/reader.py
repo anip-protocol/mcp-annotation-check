@@ -33,4 +33,5 @@ class FakeReader:
         return Recorded(snap, {"issue": issue.updated_at})
 
     async def cleanup(self, entry: ToolEntry, fixture: dict[str, Any]) -> None:
-        self.store.issues.pop(fixture["issue_id"], None)
+        if "issue_id" in fixture:  # {} when setup failed: nothing to remove
+            self.store.issues.pop(fixture["issue_id"], None)

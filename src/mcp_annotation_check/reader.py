@@ -16,5 +16,10 @@ class StateReader(Protocol):
         ...
 
     async def cleanup(self, entry: ToolEntry, fixture: dict[str, Any]) -> None:
-        """Remove or close the fixture."""
+        """Remove or close the fixture.
+
+        Called even when fixture setup raised; `fixture` is then `{}`. A reader that
+        may have created something before failing must track it itself and undo it
+        here; with nothing to undo, an empty fixture is a no-op.
+        """
         ...

@@ -10,7 +10,10 @@ def _names(fields: list[FieldSpec]) -> str:
     return ", ".join(f.path for f in fields)
 
 
-def _diff(before: Recorded, after: Recorded, fields: list[FieldSpec]) -> dict[str, tuple[Any, Any]]:
+def diff_fields(
+    before: Recorded, after: Recorded, fields: list[FieldSpec]
+) -> dict[str, tuple[Any, Any]]:
+    """Every listed field whose value differs between the snapshots."""
     return {
         f.path: (before.snapshot.get(f.path), after.snapshot.get(f.path))
         for f in fields
@@ -21,7 +24,7 @@ def _diff(before: Recorded, after: Recorded, fields: list[FieldSpec]) -> dict[st
 def _equality_verdict(
     check: Check, before: Recorded, after: Recorded, fields: list[FieldSpec]
 ) -> Verdict:
-    changed = _diff(before, after, fields)
+    changed = diff_fields(before, after, fields)
     warnings: list[str] = []
     if changed:
         outcome = Outcome.FINDING
@@ -34,7 +37,7 @@ def _equality_verdict(
                 "updated_at changed although the compared fields did not; "
                 "updated_at is recorded but never compared"
             )
-    return Verdict(check, outcome, detail, changed, warnings, SCHEMA_TEXT[check])
+    return Verdict(check, outcome, detail, changed, warnings, SCHEMA_TEXT[check], dict(changed))
 
 
 def judge_read_only(before: Recorded, after: Recorded, fields: list[FieldSpec]) -> Verdict:
@@ -53,6 +56,7 @@ def judge_non_destructive(
     fields: list[FieldSpec],
     supplied: dict[str, Any],
 ) -> Verdict:
+    diff = diff_fields(before, after, fields)
     findings: dict[str, tuple[Any, Any]] = {}
     observations: dict[str, tuple[Any, Any]] = {}
     for f in fields:
@@ -72,7 +76,10 @@ def judge_non_destructive(
         outcome = Outcome.OBSERVATION
         detail = f"overwritten with the supplied value: {', '.join(observations)}"
     else:
-        outcome, detail = Outcome.PASS, f"no change observed in {_names(fields)}"
+        outcome = Outcome.PASS
+        detail = f"nothing removed or overwritten in {_names(fields)}"
+        if diff:
+            detail += f"; additions in {', '.join(diff)}"
     return Verdict(
         Check.NON_DESTRUCTIVE,
         outcome,
@@ -80,4 +87,5 @@ def judge_non_destructive(
         {**observations, **findings},
         [],
         SCHEMA_TEXT[Check.NON_DESTRUCTIVE],
+        diff,
     )

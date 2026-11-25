@@ -5,6 +5,7 @@ Per judged tool: fixture, arguments, before-snapshot, call, settled after-snapsh
 and cleanup in a `finally`. A failure at any step is an ERROR for that tool only.
 """
 
+import dataclasses
 import hashlib
 import importlib.metadata
 import json
@@ -17,12 +18,17 @@ from mcp import Client
 from mcp.types import Tool
 
 from mcp_annotation_check import __version__
-from mcp_annotation_check.claims import Check, Claims, applicable_checks, claims_of
+from mcp_annotation_check.claims import SCHEMA_TEXT, Check, Claims, applicable_checks, claims_of
 from mcp_annotation_check.pack import Pack, ToolEntry, render_arguments, supplied_values
 from mcp_annotation_check.reader import StateReader
 from mcp_annotation_check.redact import redact
 from mcp_annotation_check.report import RunHeader, ToolResult
-from mcp_annotation_check.rules import judge_idempotent, judge_non_destructive, judge_read_only
+from mcp_annotation_check.rules import (
+    diff_fields,
+    judge_idempotent,
+    judge_non_destructive,
+    judge_read_only,
+)
 from mcp_annotation_check.settle import SettleTimeout, settle
 from mcp_annotation_check.snapshot import FieldSpec, Outcome, Recorded, Verdict
 
@@ -297,9 +303,17 @@ class _ToolCheck:
             self.errors.append(f"tool returned an error: {text}")
 
     def _judge(self, check: Check, before: Recorded, after: Recorded) -> Verdict:
-        if self.custom_verdict is not None and check is self.checks[0]:
-            return self.custom_verdict(before, after, self.entry, self.arguments)
         fields = self.fields[check]
+        if self.custom_verdict is not None and check is self.checks[0]:
+            # The harness, not the custom function, decides which check this is,
+            # quotes its schema text and records the observed evidence.
+            verdict = self.custom_verdict(before, after, self.entry, self.arguments)
+            return dataclasses.replace(
+                verdict,
+                check=check,
+                schema_text=SCHEMA_TEXT[check],
+                diff=diff_fields(before, after, fields),
+            )
         if check is Check.READ_ONLY:
             return judge_read_only(before, after, fields)
         if check is Check.NON_DESTRUCTIVE:

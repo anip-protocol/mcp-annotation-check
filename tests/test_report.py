@@ -82,6 +82,17 @@ async def test_markdown_sections(tmp_path):
     # the "not observed" limit is visible for a passing tool
     counter = md.split("### bump_hidden_counter", 1)[1].split("\n### ", 1)[0]
     assert "no change observed in issue.labels, issue.title, issue.notes" in counter
+    # an additive pass shows its evidence and says nothing was removed
+    add = md.split("### add_labels", 1)[1].split("\n### ", 1)[0]
+    assert (
+        "nothing removed or overwritten in issue.labels; additions in issue.labels" in add
+    )
+    assert "@@ issue.labels @@ additive" in add
+    assert "  c" in add and "+ x" in add
+    assert "@@ issue.labels @@ lost or overwritten" in section
+    # read-only and idempotent findings mark their fields as changed
+    note = md.split("### append_note", 1)[1].split("\n### ", 1)[0]
+    assert "@@ issue.notes @@ changed" in note
     # an errored call that still changed state shows its error
     explode = md.split("### explode", 1)[1].split("\n### ", 1)[0]
     assert "Error executing tool explode" in explode

@@ -3,7 +3,7 @@ from dataclasses import replace
 import pytest
 from mcp.types import ToolAnnotations
 
-from mcp_annotation_check.claims import Check
+from mcp_annotation_check.claims import SCHEMA_TEXT, Check
 from mcp_annotation_check.fake.reader import FakeReader
 from mcp_annotation_check.fake.server import FakeStore, build_fake_server
 from mcp_annotation_check.pack import load_pack
@@ -110,6 +110,14 @@ async def test_error_with_state_change_is_finding():
     assert explode.calls[0]["is_error"] is True
     (verdict,) = explode.verdicts
     assert verdict.changed["issue.labels"] == (frozenset({"c", "d"}), frozenset({"d"}))
+
+
+async def test_additive_pass_carries_its_diff():
+    _, results = await run_fake()
+    (verdict,) = by_tool(results)["add_labels"].verdicts
+    assert verdict.outcome is Outcome.PASS
+    assert verdict.diff == {"issue.labels": (frozenset({"c", "d"}), frozenset({"c", "d", "x"}))}
+    assert verdict.detail.startswith("nothing removed or overwritten in issue.labels")
 
 
 async def test_cleanup_runs_for_every_fixture():
@@ -312,7 +320,29 @@ async def test_custom_verdict_is_flagged_with_reason(monkeypatch, tmp_path):
 
     write_reports(header, results, tmp_path)
     md = (tmp_path / "report.md").read_text()
-    assert "Custom verdict" in md and "demo" in md
+    section = md.split("### set_labels", 1)[1].split("\n### ", 1)[0]
+    assert "Custom verdict" in section and "demo" in section
+    assert (
+        "> If true, the tool may perform destructive updates to its environment. "
+        "If false, the tool performs only additive updates." in section
+    )
+    assert "- c" in section and "+ x" in section  # harness-observed evidence
+    assert "@@ issue.labels @@ not counted by the custom verdict" in section
+    assert "additive" not in section.split("Diff", 1)[1]
+
+
+async def test_custom_verdict_cannot_change_check_or_schema_text(monkeypatch):
+    def wrong_check(before, after, entry, arguments) -> Verdict:
+        return Verdict(Check.READ_ONLY, Outcome.PASS, "custom", schema_text="made up")
+
+    monkeypatch.setitem(CUSTOM_VERDICTS, "wrong_check", wrong_check)
+    pack = load_pack(FAKE_PACK)
+    entry = replace(pack.entries["set_labels"], custom_verdict="wrong_check", custom_reason="r")
+    _, results = await run_fake(pack=with_entries(pack, set_labels=entry))
+    (verdict,) = by_tool(results)["set_labels"].verdicts
+    assert verdict.check is Check.NON_DESTRUCTIVE
+    assert verdict.schema_text == SCHEMA_TEXT[Check.NON_DESTRUCTIVE]
+    assert verdict.diff == {"issue.labels": (frozenset({"c", "d"}), frozenset({"x"}))}
 
 
 @pytest.mark.parametrize("key", ["custom_setup", "custom_verdict"])

@@ -33,6 +33,38 @@ def test_label_add_passes():
         {"issue.labels": frozenset({"a"})},
     )
     assert v.outcome is Outcome.PASS
+    assert v.changed == {}
+    assert v.diff == {"issue.labels": (frozenset({"c"}), frozenset({"c", "a"}))}
+    assert v.detail == (
+        "nothing removed or overwritten in issue.labels; additions in issue.labels"
+    )
+
+
+def test_non_destructive_pass_without_change_has_no_additions():
+    v = judge_non_destructive(
+        rec(issue__labels=frozenset({"c"}), issue__title="t"),
+        rec(issue__labels=frozenset({"c"}), issue__title="t"),
+        [LABELS, TITLE],
+        {},
+    )
+    assert v.outcome is Outcome.PASS
+    assert v.diff == {}
+    assert v.detail == "nothing removed or overwritten in issue.labels, issue.title"
+
+
+def test_non_destructive_diff_holds_additions_beside_findings():
+    v = judge_non_destructive(
+        rec(issue__labels=frozenset({"c"}), issue__title=None),
+        rec(issue__labels=frozenset(), issue__title="x"),
+        [LABELS, TITLE],
+        {},
+    )
+    assert v.outcome is Outcome.FINDING
+    assert set(v.changed) == {"issue.labels"}
+    assert v.diff == {
+        "issue.labels": (frozenset({"c"}), frozenset()),
+        "issue.title": (None, "x"),
+    }
 
 
 def test_listed_removal_is_finding():
@@ -50,6 +82,7 @@ def test_supplied_title_overwrite_is_observation():
         rec(issue__title="old"), rec(issue__title="new"), [TITLE], {"issue.title": "new"}
     )
     assert v.outcome is Outcome.OBSERVATION
+    assert v.diff == v.changed == {"issue.title": ("old", "new")}
 
 
 def test_unnamed_title_change_is_finding():
@@ -60,6 +93,8 @@ def test_unnamed_title_change_is_finding():
 def test_empty_to_set_is_additive():
     v = judge_non_destructive(rec(issue__title=None), rec(issue__title="x"), [TITLE], {})
     assert v.outcome is Outcome.PASS
+    assert v.diff == {"issue.title": (None, "x")}
+    assert v.detail == "nothing removed or overwritten in issue.title; additions in issue.title"
 
 
 def test_read_only_change_is_finding_and_quotes_schema():
@@ -67,6 +102,7 @@ def test_read_only_change_is_finding_and_quotes_schema():
     assert v.outcome is Outcome.FINDING
     assert v.schema_text == SCHEMA_TEXT[Check.READ_ONLY]
     assert "issue.title" in v.detail
+    assert v.diff == v.changed == {"issue.title": ("a", "b")}
 
 
 def test_read_only_timestamp_only_change_warns_but_passes():
@@ -84,6 +120,7 @@ def test_idempotent_second_call_change_is_finding():
         [LABELS],
     )
     assert v.outcome is Outcome.FINDING
+    assert v.diff == v.changed == {"issue.labels": (frozenset({"a"}), frozenset({"a", "a2"}))}
 
 
 def test_pass_detail_names_fields():
@@ -93,3 +130,4 @@ def test_pass_detail_names_fields():
         [LABELS, TITLE],
     )
     assert v.detail == "no change observed in issue.labels, issue.title"
+    assert v.diff == {}

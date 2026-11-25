@@ -67,3 +67,11 @@ def test_fake_pack_loads():
     } | {f.path for f in pack.standard_read_only_fields}
     assert "issue.counter" not in counter_paths
     assert pack.entries["bump_hidden_counter"].fields == []
+
+
+async def test_fake_reader_cleanup_of_empty_fixture_is_noop():
+    store = FakeStore()
+    issue_id = store.create_issue()
+    pack = load_pack(PACK)
+    await FakeReader(store).cleanup(pack.entries["set_labels"], {})
+    assert issue_id in store.issues

@@ -219,13 +219,13 @@ def _tool_section(r: ToolResult) -> list[str]:
     lines += _quote(r.description or "(none)")
     lines.append("")
     for v in r.verdicts:
-        lines += _verdict_section(v)
+        lines += _verdict_section(v, custom=r.custom is not None)
     if r.calls:
         lines += ["Calls:", ""] + _fenced(json.dumps(r.calls, indent=2), "json") + [""]
     return lines
 
 
-def _verdict_section(v: Verdict) -> list[str]:
+def _verdict_section(v: Verdict, custom: bool = False) -> list[str]:
     lines = [f"#### {v.check.value}: {v.outcome.value.upper()}", ""]
     if v.schema_text:
         lines += _quote(v.schema_text) + [""]
@@ -233,20 +233,27 @@ def _verdict_section(v: Verdict) -> list[str]:
     lines += [f"Warning: {_inline(w)}" for w in v.warnings]
     if v.warnings:
         lines.append("")
-    if v.changed:
+    if v.diff:
         between = (
             "after the first call and after the second call"
             if v.check is Check.IDEMPOTENT
             else "before and after the call"
         )
-        lines += [f"Diff {between}:", ""] + _fenced(_diff_text(v.changed), "diff") + [""]
+        lines += [f"Diff {between}:", ""] + _fenced(_diff_text(v, custom), "diff") + [""]
     return lines
 
 
-def _diff_text(changed: dict[str, tuple[Any, Any]]) -> str:
+def _diff_text(v: Verdict, custom: bool = False) -> str:
+    """Render every differing field; mark which ones count against the claim.
+
+    Under a custom verdict an uncounted field is not necessarily additive, so the
+    mark says only that the custom verdict did not count it.
+    """
+    counted = "lost or overwritten" if v.check is Check.NON_DESTRUCTIVE else "changed"
+    uncounted = "not counted by the custom verdict" if custom else "additive"
     out: list[str] = []
-    for path, (before, after) in changed.items():
-        out.append(f"@@ {path} @@")
+    for path, (before, after) in v.diff.items():
+        out.append(f"@@ {path} @@ {counted if path in v.changed else uncounted}")
         if isinstance(before, frozenset) or isinstance(after, frozenset):
             b, a = before or frozenset(), after or frozenset()
             for item in sorted(b | a, key=lambda x: _sort_key(jsonable(x))):

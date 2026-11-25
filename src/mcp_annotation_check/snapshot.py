@@ -42,6 +42,9 @@ class Verdict:
     check: Check
     outcome: Outcome
     detail: str
+    # The fields that count against the claim (for non-destructive: lost or overwritten).
     changed: dict[str, tuple[Any, Any]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     schema_text: str = ""
+    # Every compared field whose value differs between the two snapshots, additions included.
+    diff: dict[str, tuple[Any, Any]] = field(default_factory=dict)
