@@ -4,5 +4,53 @@ allowlist: []
 repositories:
   write: owner/write-repo
   read: owner/read-repo
-standard_read_only_fields: []
-tools: {}
+standard_read_only_fields:
+  - {path: issue.labels, kind: collection}
+  - {path: issue.title, kind: scalar}
+  - {path: issue.notes, kind: collection}
+tools:
+  get_issue:
+    fixture: issue
+    arguments:
+      issue_id: "{fixture.issue_id}"
+  peek_and_touch:
+    fixture: issue
+    arguments:
+      issue_id: "{fixture.issue_id}"
+  bump_hidden_counter:
+    fixture: issue
+    arguments:
+      issue_id: "{fixture.issue_id}"
+  set_labels:
+    fixture: issue
+    arguments:
+      issue_id: "{fixture.issue_id}"
+      labels: [x]
+    fields: [{path: issue.labels, kind: collection}]
+    supplies: {issue.labels: labels}
+  add_labels:
+    fixture: issue
+    arguments:
+      issue_id: "{fixture.issue_id}"
+      labels: [x]
+    fields: [{path: issue.labels, kind: collection}]
+    supplies: {issue.labels: labels}
+  rename_issue:
+    fixture: issue
+    arguments:
+      issue_id: "{fixture.issue_id}"
+      title: renamed
+    fields: [{path: issue.title, kind: scalar}]
+    supplies: {issue.title: title}
+  append_note:
+    fixture: issue
+    arguments:
+      issue_id: "{fixture.issue_id}"
+      text: a note
+    fields: [{path: issue.notes, kind: collection}]
+  explode:
+    fixture: issue
+    arguments:
+      issue_id: "{fixture.issue_id}"
+      label: c
+    fields: [{path: issue.labels, kind: collection}]
