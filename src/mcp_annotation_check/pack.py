@@ -2,7 +2,9 @@
 
 Top-level keys:
   server, version      strings
-  allowlist            list of server names/hosts the pack may run against
+  allowlist            list of GitHub owners (the test organization, and the test
+                       account if needed) the harness may act on; compared
+                       case-insensitively by the safety checks
   repositories         map name -> "owner/name" (names used: "read", "write")
   standard_read_only_fields   list of {path, kind} compared for read-only tools
   id_only_write_tools  list of tool names (default empty)

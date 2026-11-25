@@ -10,7 +10,7 @@ import hashlib
 import importlib.metadata
 import json
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -64,7 +64,10 @@ async def run(
     *,
     settle_interval_s: float = 1.0,
     settle_timeout_s: float = 20.0,
+    secrets: Sequence[str] = (),
 ) -> tuple[RunHeader, list[ToolResult]]:
+    """Run every listed tool. Every error text is redacted against `secrets`."""
+    secrets = (secrets,) if isinstance(secrets, str) else tuple(secrets)
     listed = await _list_all_tools(client)
     header = _header(client, pack, header_context, listed)
     run_id = uuid.uuid4().hex[:8]
@@ -72,7 +75,8 @@ async def run(
     for tool in listed:
         results.append(
             await _check_tool(
-                client, reader, pack, tool, run_id, before_call, settle_interval_s, settle_timeout_s
+                client, reader, pack, tool, run_id, before_call,
+                settle_interval_s, settle_timeout_s, secrets,
             )
         )
     listed_names = {t.name for t in listed}
@@ -153,6 +157,7 @@ async def _check_tool(
     before_call: BeforeCall | None,
     interval_s: float,
     timeout_s: float,
+    secrets: tuple[str, ...],
 ) -> ToolResult:
     claims = claims_of(tool)
     checks = applicable_checks(claims)
@@ -167,7 +172,7 @@ async def _check_tool(
     else:
         return await _ToolCheck(
             client, reader, pack, tool, entry, claims, checks, run_id, before_call,
-            interval_s, timeout_s,
+            interval_s, timeout_s, secrets,
         ).run()
     return _unjudged(tool.name, description, claims, Outcome.SKIPPED, skip_reason=reason)
 
@@ -188,8 +193,10 @@ class _ToolCheck:
         before_call: BeforeCall | None,
         interval_s: float,
         timeout_s: float,
+        secrets: tuple[str, ...],
     ) -> None:
         self.client, self.reader, self.pack = client, reader, pack
+        self.secrets = secrets
         self.tool, self.entry, self.claims, self.checks = tool, entry, claims, checks
         self.run_id, self.before_call = run_id, before_call
         self.interval_s, self.timeout_s = interval_s, timeout_s
@@ -245,13 +252,13 @@ class _ToolCheck:
                 self.verdicts.append(self._judge(Check.IDEMPOTENT, after, after_second))
         except Exception as e:
             failed = True
-            self.errors.append(redact(_describe(step, e)))
+            self.errors.append(self._redact(_describe(step, e)))
         finally:
             if needs_cleanup:
                 try:
                     await self.reader.cleanup(self.entry, self.fixture)
                 except Exception as e:
-                    self.errors.append(redact(f"cleanup failed: {type(e).__name__}: {e}"))
+                    self.errors.append(self._redact(f"cleanup failed: {type(e).__name__}: {e}"))
         return ToolResult(
             tool=self.tool.name,
             description=self.tool.description or "",
@@ -267,6 +274,9 @@ class _ToolCheck:
                 v.check is Check.READ_ONLY and v.outcome is Outcome.FINDING for v in self.verdicts
             ),
         )
+
+    def _redact(self, text: str) -> str:
+        return redact(text, self.secrets)
 
     async def _read(self) -> Recorded:
         return await self.reader.snapshot(self.snapshot_fields, self.fixture)
@@ -288,13 +298,13 @@ class _ToolCheck:
         try:
             result = await self.client.call_tool(name, arguments)
         except Exception as e:
-            text = redact(f"{type(e).__name__}: {e}")
+            text = self._redact(f"{type(e).__name__}: {e}")
             self.calls.append(
                 {"tool": name, "arguments": arguments, "is_error": True, "content": text}
             )
             self.errors.append(f"call raised {text}")
             return
-        text = redact(_content_text(result.content))
+        text = self._redact(_content_text(result.content))
         is_error = bool(result.is_error)
         self.calls.append(
             {"tool": name, "arguments": arguments, "is_error": is_error, "content": text}

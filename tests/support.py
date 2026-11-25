@@ -37,6 +37,7 @@ async def run_fake(
     reader: Any = None,
     server: Any = None,
     before_call: Any = None,
+    secrets: Any = (),
 ):
     store = store or FakeStore()
     pack = pack or load_pack(FAKE_PACK)
@@ -49,6 +50,7 @@ async def run_fake(
             pack,
             HEADER_CONTEXT,
             before_call=before_call,
+            secrets=secrets,
             settle_interval_s=0.01,
             settle_timeout_s=0.3,
         )
