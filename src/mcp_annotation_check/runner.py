@@ -2,7 +2,12 @@
 
 Per judged tool: fixture, arguments, before-snapshot, call, settled after-snapshot
 (taken even when the call errored), rules, a second call for the idempotent check,
-and cleanup in a `finally`. A failure at any step is an ERROR for that tool only.
+and cleanup in a `finally`. A failure at any step is an ERROR for that tool only,
+with one exception: a refusal by `before_call` (the per-call safety check) stops the
+run. The refused tool is an ERROR and every remaining tool is SKIPPED with
+"run stopped after a safety refusal on <tool>"; the results are still returned so the
+reports can be written. Any exception from `before_call` counts as a refusal, since a
+safety check that fails to run has not passed.
 """
 
 import dataclasses
@@ -55,6 +60,10 @@ class _HarnessError(Exception):
     """A failure whose message is reported as is, without a step prefix."""
 
 
+class _CallRefused(_HarnessError):
+    """before_call refused a call: the run stops after this tool."""
+
+
 async def run(
     client: Client,
     reader: StateReader,
@@ -72,13 +81,26 @@ async def run(
     header = _header(client, pack, header_context, listed)
     run_id = uuid.uuid4().hex[:8]
     results: list[ToolResult] = []
+    refused_on: str | None = None
     for tool in listed:
-        results.append(
-            await _check_tool(
-                client, reader, pack, tool, run_id, before_call,
-                settle_interval_s, settle_timeout_s, secrets,
+        if refused_on is not None:
+            results.append(
+                _unjudged(
+                    tool.name,
+                    tool.description or "",
+                    claims_of(tool),
+                    Outcome.SKIPPED,
+                    skip_reason=f"run stopped after a safety refusal on {refused_on}",
+                )
             )
+            continue
+        result, refused = await _check_tool(
+            client, reader, pack, tool, run_id, before_call,
+            settle_interval_s, settle_timeout_s, secrets,
         )
+        results.append(result)
+        if refused:
+            refused_on = tool.name
     listed_names = {t.name for t in listed}
     for name in pack.entries:
         if name not in listed_names:
@@ -158,7 +180,8 @@ async def _check_tool(
     interval_s: float,
     timeout_s: float,
     secrets: tuple[str, ...],
-) -> ToolResult:
+) -> tuple[ToolResult, bool]:
+    """The tool's result, and whether before_call refused one of its calls."""
     claims = claims_of(tool)
     checks = applicable_checks(claims)
     entry = pack.entries.get(tool.name)
@@ -170,11 +193,12 @@ async def _check_tool(
     elif entry.status == "skipped":
         reason = entry.skip_reason or "skipped by the pack"
     else:
-        return await _ToolCheck(
+        check = _ToolCheck(
             client, reader, pack, tool, entry, claims, checks, run_id, before_call,
             interval_s, timeout_s, secrets,
-        ).run()
-    return _unjudged(tool.name, description, claims, Outcome.SKIPPED, skip_reason=reason)
+        )
+        return await check.run(), check.refused
+    return _unjudged(tool.name, description, claims, Outcome.SKIPPED, skip_reason=reason), False
 
 
 class _ToolCheck:
@@ -212,6 +236,7 @@ class _ToolCheck:
         self.calls: list[dict] = []
         self.errors: list[str] = []
         self.waited_s = 0.0
+        self.refused = False
 
     async def run(self) -> ToolResult:
         failed = False
@@ -252,6 +277,7 @@ class _ToolCheck:
                 self.verdicts.append(self._judge(Check.IDEMPOTENT, after, after_second))
         except Exception as e:
             failed = True
+            self.refused = isinstance(e, _CallRefused)
             self.errors.append(self._redact(_describe(step, e)))
         finally:
             if needs_cleanup:
@@ -294,7 +320,7 @@ class _ToolCheck:
             try:
                 await self.before_call(name, arguments)
             except Exception as e:
-                raise _HarnessError(f"call refused: {type(e).__name__}: {e}") from e
+                raise _CallRefused(f"call refused: {type(e).__name__}: {e}") from e
         try:
             result = await self.client.call_tool(name, arguments)
         except Exception as e:

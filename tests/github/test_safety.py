@@ -288,3 +288,91 @@ async def test_search_query_not_modified():
     await make_before_call(gh.rest, pack())("search_issues", arguments)
     assert arguments == original
     assert gh.requests == []
+
+
+# --- owner-naming arguments beyond the four basic keys (ruling R14) -------------
+
+
+async def test_fork_into_outside_organization_refused():
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal, match="outside-org"):
+        await make_before_call(gh.rest, pack())(
+            "fork_repository", {"owner": ORG, "repo": "write-repo", "organization": "outside-org"}
+        )
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"org": "outside-org"},
+        {"organization": "outside-org"},
+        {"user": "outside-org"},
+        {"username": "outside-org"},
+        {"Owner": "outside-org", "repo": "thing"},
+        {"owner_login": "outside-org"},
+        {"ownerLogin": "outside-org"},
+        {"repo_owner": "outside-org"},
+        {"owner": ORG, "repo_name": "outside-org/thing"},
+        {"repoName": "outside-org/thing"},
+        {"repository_name": "outside-org/thing"},
+        {"repositoryFullName": "outside-org/thing"},
+        {"nameWithOwner": "outside-org/thing"},
+        {"org": "outside-org", "repo_name": "thing"},
+        {"nested": [{"Organization": "outside-org"}]},
+    ],
+)
+async def test_owner_key_variants_checked(arguments):
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal, match="outside-org"):
+        await make_before_call(gh.rest, pack())("some_tool", arguments)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"Owner": ORG, "repoName": "write-repo"},
+        {"organization": "Test-Org"},
+        {"owner_login": ORG, "repository_name": "write-repo"},
+        {"username": ORG},
+        {"report": "weekly", "body": "text", "sort_order": "asc", "category": "x"},
+    ],
+)
+async def test_owner_key_variants_allowed(arguments):
+    gh = GitHub()
+    await make_before_call(gh.rest, pack())("some_tool", arguments)
+    assert gh.requests == []
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"owner_type": "Organization"},
+        {"orgs": [ORG]},
+        {"user_id": 5},
+        {"organization": {"login": ORG}},
+        {"repositories": [WRITE]},
+    ],
+)
+async def test_uninterpretable_owner_or_repository_argument_refused(arguments):
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal):
+        await make_before_call(gh.rest, pack())("some_tool", arguments)
+    assert gh.requests == []
+
+
+async def test_bare_repository_with_two_owners_refused():
+    gh = GitHub()
+    two = pack(allowlist=[ORG, "test-org-2"])
+    with pytest.raises(SafetyRefusal, match="ambiguous"):
+        await make_before_call(gh.rest, two)(
+            "some_tool", {"owner": ORG, "org": "test-org-2", "repo": "write-repo"}
+        )
+
+
+async def test_repository_id_resolved_for_any_tool():
+    gh = GitHub({"/repositories/5": repo("outside-org/thing")})
+    with pytest.raises(SafetyRefusal, match="outside-org"):
+        await make_before_call(gh.rest, pack())("get_repository", {"repository_id": 5})
+    gh = GitHub({"/repositories/5": repo(WRITE)})
+    await make_before_call(gh.rest, pack())("get_repository", {"repoId": 5})
+    assert [r.url.path for r in gh.requests] == ["/repositories/5"]

@@ -32,33 +32,67 @@ pytest -m live tests/github/test_live_preflight.py -v -s
   that both test repositories are listed, and prints whether the listing is exactly those
   two or something wider.
 - `test_compensating_check_endpoints_answer` calls `GET /user/orgs` and
-  `GET /user/repos?affiliation=owner` and prints whether each answers, and with how many
-  entries.
+  `GET /user/repos?affiliation=owner`, prints whether each answers and what it lists, and,
+  when a known extra membership is named (below), whether that membership is visible.
 
 Both make only GET requests and never print the token.
 
+An empty or allowlisted answer from the step-4 endpoints cannot, on its own, tell
+"the account has no other memberships" from "the token hides them". To tell them apart,
+for the duration of this check only:
+
+1. Create a throwaway organization and add the test account to it, and create a throwaway
+   repository owned by the test account. Do not grant the token access to either. Confirm
+   both appear in the account's web UI (Settings > Organizations; the account's
+   repository list).
+2. Run the tests with them named:
+
+   ```
+   MCP_ANNOTATION_CHECK_KNOWN_EXTRA_ORG=<throwaway-org> \
+   MCP_ANNOTATION_CHECK_KNOWN_OWNED_REPO=<test-account>/<throwaway-repo> \
+   MCP_ANNOTATION_CHECK_GITHUB_TOKEN=… \
+   MCP_ANNOTATION_CHECK_TEST_REPOSITORIES=<org>/<read-repo>,<org>/<write-repo> \
+   pytest -m live tests/github/test_live_preflight.py -v -s
+   ```
+
+   The test prints, for each endpoint, either "lists <name>: it reports the account" or
+   "hides <name>: it is filtered by the token". Without the variables it prints what was
+   listed, and the comparison against the web UI must be done by hand.
+3. Remove the account from the throwaway organization and delete the throwaway
+   repository. Preflight step 4 refuses to run while they exist, which is expected.
+
 ### What each result means
 
-- **Only the token's two repositories.** Step 3 checks the token's real reach: with a
-  fine-grained token it can never list anything outside the test organization. The
-  compensating check (step 4) still runs as a second line of defence.
+For `/user/repos` (preflight step 3):
+
+- **Only the token's two repositories.** Step 3 sees exactly what the token can reach,
+  and that is inside the test organization.
 - **The account's wider set.** Step 3 alone is weaker than it reads: it checks the
   account, not the token. A fine-grained token is bound to a single resource owner, so
   the token still cannot write outside the test organization, but that guarantee then
-  rests on GitHub's token model, not on what step 3 observed. The compensating check
-  (step 4) is what guarantees isolation: `/user/orgs` listing only allowlisted
-  organizations and `/user/repos?affiliation=owner` being empty or allowlisted mean the
-  account itself reaches nothing else. Repositories where the account is only a
-  collaborator also appear in the default `/user/repos` listing in this case, so step 3
-  refuses them.
+  rests on GitHub's token model, not on what step 3 observed. Repositories where the
+  account is only a collaborator also appear in this listing, so step 3 refuses them.
 - **A test repository is missing.** The token is not set up as intended; preflight
   step 3 refuses to run, which is correct. Fix the token's repository access and repeat.
-- **`/user/orgs` or `/user/repos?affiliation=owner` fails (for example 403).**
-  Preflight step 4 treats any failure as a refusal, so the harness can never run with
-  this token. The design of step 4 would have to be revisited (for example by granting
-  the smallest account permission that lets these endpoints answer); the check must not
-  simply be dropped.
+
+For `/user/orgs` and `/user/repos?affiliation=owner` (preflight step 4):
+
+- **They list the throwaway organization and repository (they report the account).**
+  Step 4 is meaningful: when it passes, the account itself belongs to no organization
+  and owns no repository outside the allowlist. This is the case in which step 4 is what
+  guarantees isolation, whatever `/user/repos` reflects.
+- **They hide the throwaway organization and repository (they are filtered by the
+  token).** Step 4 passes vacuously: it proves nothing beyond step 3. Isolation then
+  rests on the token alone (single resource owner, repository permissions only, limited
+  to the two repositories) and on keeping the test account free of other memberships,
+  which must be checked by hand in the web UI before each run. Record this plainly; do
+  not describe step 4 as a guarantee.
+- **Either endpoint fails (for example 403).** Preflight step 4 treats any failure as a
+  refusal, so the harness can never run with this token. The design of step 4 would have
+  to be revisited (for example by granting the smallest account permission that lets
+  these endpoints answer); the check must not simply be dropped.
 
 ### Observed
 
-_Pending. Record here: the date, which result above was seen, and the printed lines._
+_Pending. Record here: the date, which result above was seen for each endpoint, and the
+printed lines._

@@ -1,12 +1,14 @@
 from dataclasses import replace
 
 import pytest
+from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
 from mcp_annotation_check.claims import SCHEMA_TEXT, Check
 from mcp_annotation_check.fake.reader import FakeReader
 from mcp_annotation_check.fake.server import FakeStore, build_fake_server
 from mcp_annotation_check.pack import load_pack
+from mcp_annotation_check.report import write_reports
 from mcp_annotation_check.rules import Outcome
 from mcp_annotation_check.runner import CUSTOM_SETUPS, CUSTOM_VERDICTS, ToolResult
 from mcp_annotation_check.settle import SettleTimeout, settle
@@ -267,10 +269,67 @@ async def test_before_call_refusal_is_error_and_cleanup_runs():
     assert got["set_labels"].outcome is Outcome.ERROR
     assert "owner not allowlisted" in got["set_labels"].error
     assert got["set_labels"].calls == []
-    assert got["add_labels"].outcome is Outcome.PASS
-    # the idempotent second call is checked too
-    assert [t for t, _ in seen].count("append_note") == 2
+    # a refusal stops the run (spec Safety: failing any check stops the run)
+    assert got["add_labels"].outcome is Outcome.SKIPPED
+    assert seen[-1][0] == "set_labels"  # no call is checked after the refusal
     assert store.issues == {}
+
+
+async def test_before_call_checks_the_idempotent_second_call():
+    seen: list[str] = []
+
+    async def before_call(tool: str, arguments: dict) -> None:
+        seen.append(tool)
+
+    await run_fake(before_call=before_call)
+    assert seen.count("append_note") == 2
+
+
+def _three_tool_server(store: FakeStore):
+    server = MCPServer("three")
+    for name in ("first", "second", "third"):
+
+        def add(issue_id: str, labels: list[str]) -> str:
+            store.touch(issue_id).labels |= set(labels)
+            return issue_id
+
+        server.tool(name=name, annotations=ToolAnnotations(destructive_hint=False))(add)
+    return server
+
+
+async def test_safety_refusal_stops_the_run_and_reports_are_written(tmp_path):
+    from mcp_annotation_check.github.safety import SafetyRefusal
+
+    calls: list[str] = []
+
+    async def before_call(tool: str, arguments: dict) -> None:
+        calls.append(tool)
+        if tool == "second":
+            raise SafetyRefusal("owner 'outside-org' is not on the allowlist")
+
+    store = FakeStore()
+    pack = load_pack(FAKE_PACK)
+    template = pack.entries["add_labels"]
+    pack = replace(
+        pack, entries={n: replace(template, tool=n) for n in ("first", "second", "third")}
+    )
+    header, results = await run_fake(
+        pack=pack, store=store, server=_three_tool_server(store), before_call=before_call
+    )
+    got = by_tool(results)
+    assert [r.tool for r in results] == ["first", "second", "third"]
+    assert got["first"].outcome is Outcome.PASS
+    assert got["second"].outcome is Outcome.ERROR
+    assert "outside-org" in got["second"].error
+    assert got["third"].outcome is Outcome.SKIPPED
+    assert got["third"].skip_reason == "run stopped after a safety refusal on second"
+    assert got["third"].calls == []
+    assert calls == ["first", "second"]
+    assert store.issues == {}  # the refused tool's fixture was still cleaned up
+    write_reports(header, results, tmp_path)
+    for name in ("report.md", "report.json", "private-findings.md"):
+        assert (tmp_path / name).exists()
+    assert "run stopped after a safety refusal on second" in (tmp_path / "report.md").read_text()
 
 
 async def test_read_repository_entry_without_fixture_uses_read_fixtures():

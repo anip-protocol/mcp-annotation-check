@@ -12,17 +12,30 @@ Preflight (`preflight`), in order, using only GET requests:
      and every pack repository must be listed.
   4. The compensating check, always run: `GET /user/orgs` must list only allowlisted
      organizations, and `GET /user/repos?affiliation=owner` must be empty or
-     allowlisted. Whatever `/user/repos` reflects (the token or the whole account),
-     together these mean the account itself reaches nothing outside the allowlist.
+     allowlisted. This guarantees the account itself reaches nothing outside the
+     allowlist *only if these two endpoints report the account's memberships and
+     repositories*. If GitHub filters them by the fine-grained token instead, step 4
+     passes vacuously and proves nothing beyond step 3. Which case holds is an
+     observation recorded in docs/verification.md, not something this code can tell.
 
 Owners and logins are compared case-insensitively, as GitHub treats them.
 
 Per-call checks (`make_before_call`):
   - The content rule (`pack.check_content`) is re-applied to the rendered arguments.
-  - Repository arguments, at any depth: `owner`; `repo` and `repository` as either
-    "owner/name" or a bare name paired with `owner` at the same level; `full_name` as
-    "owner/name". Every owner named must be allowlisted. A bare name with no `owner`,
-    a non-string value, or a malformed name is refused, since it cannot be confirmed.
+  - Owner and repository arguments, at any depth. Keys are matched on their words
+    joined in lower case (`Owner`, `owner_login`, `ownerLogin` are the same key):
+      * owner keys: `owner`, `org`, `organization`, `user`, `username` and their
+        `…_login`/`…_name` forms, plus `repo_owner`/`repository_owner`;
+      * repository keys: `repo`, `repository`, `repo_name`, `repository_name`, as
+        "owner/name" or as a bare name paired with the one owner given at the same
+        level; full-name keys (`full_name`, `repository_full_name`, `name_with_owner`)
+        must be "owner/name";
+      * `repo_id`/`repository_id` are resolved through `GET /repositories/{id}` for
+        every tool, not only ID-only ones.
+    Every owner named must be allowlisted. Refused as uninterpretable: any other key
+    containing an owner or repository word (`orgs`, `user_id`, `owner_type`,
+    `repositories`, …), a non-string value, a bare name with no owner or several
+    owners, and a malformed name.
   - Tools on the pack's `id_only_write_tools` list have their top-level ID arguments
     resolved to an owner through REST before the call:
       * global IDs resolve on their own: `repository_id`/`repo_id`
@@ -55,10 +68,27 @@ FINE_GRAINED_PREFIX = "github_pat_"
 _NAME = re.compile(r"[A-Za-z0-9_.-]+")
 _ID_VALUE = re.compile(r"[A-Za-z0-9_-]+")
 _API_REPO = re.compile(r"/repos/([^/]+)/([^/?#]+)")
+_WORD = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")
 
+# Argument keys are matched on their words joined in lower case, so `Owner`,
+# `owner_login`, `ownerLogin` and `OWNER-LOGIN` are all "ownerlogin".
+_OWNER_KEYS = {
+    "owner", "ownerlogin", "ownername", "repoowner", "repositoryowner",
+    "org", "orglogin", "orgname", "organization", "organizationlogin", "organizationname",
+    "organisation", "user", "userlogin", "username",
+}
+_REPO_KEYS = {"repo", "reponame", "repository", "repositoryname"}  # "owner/name" or bare
+_FULL_NAME_KEYS = {"fullname", "repofullname", "repositoryfullname", "namewithowner", "nwo"}
+_REPO_ID_KEYS = {"repoid", "repositoryid"}
+# Any other key containing one of these words cannot be interpreted, and is refused.
+_OWNER_WORDS = {
+    "owner", "owners", "org", "orgs", "organization", "organizations", "organisation",
+    "organisations", "user", "users", "username", "usernames",
+    "repo", "repos", "repository", "repositories", "nwo",
+}
+
+_REPOSITORY_BY_ID = ("/repositories/{id}",)
 _GLOBAL_IDS = {
-    "repositoryid": ("/repositories/{id}",),
-    "repoid": ("/repositories/{id}",),
     "gistid": ("/gists/{id}",),
     "threadid": ("/notifications/threads/{id}",),
     "notificationid": ("/notifications/threads/{id}",),
@@ -180,50 +210,81 @@ def _split(value: str, key: str, tool: str) -> tuple[str, str]:
     return owner, name
 
 
-def _repositories_at(d: dict, tool: str) -> tuple[list[str], list[tuple[str, str]]]:
-    """Owners and (owner, name) pairs named by the repository arguments of one level."""
+def _words(key: str) -> list[str]:
+    """`repoName`, `repo_name`, `Repo-Name` -> ["repo", "name"]."""
+    return [w.lower() for w in _WORD.findall(key)]
+
+
+def _plain_id(key: str, raw: Any, tool: str) -> str:
+    plain = isinstance(raw, (int, str)) and not isinstance(raw, bool)
+    if not plain or not _ID_VALUE.fullmatch(str(raw)):
+        raise SafetyRefusal(f"{tool}: {key}={raw!r} is not a plain ID")
+    return str(raw)
+
+
+class _Named:
+    """What the arguments name: owners, (owner, name) pairs at the top level, and
+    repository IDs (at any depth) still to be resolved through REST."""
+
+    def __init__(self) -> None:
+        self.owners: list[str] = []
+        self.top_pairs: list[tuple[str, str]] = []
+        self.repo_ids: list[tuple[str, str]] = []
+
+
+def _level(d: dict, tool: str, named: _Named, top: bool) -> None:
+    """Classify the keys of one mapping; refuse any it cannot interpret."""
     owners: list[str] = []
-    pairs: list[tuple[str, str]] = []
-    owner = d.get("owner")
-    if "owner" in d:
-        if not isinstance(owner, str) or not owner:
-            raise SafetyRefusal(f"{tool}: owner={owner!r} is not an owner name")
-        owners.append(owner)
-    for key in ("repo", "repository", "full_name"):
-        if key not in d:
+    repos: list[tuple[str, str, bool]] = []  # (key, value, bare name allowed)
+    for key, value in d.items():
+        if not isinstance(key, str):
             continue
-        value = d[key]
-        if not isinstance(value, str) or not value:
-            raise SafetyRefusal(f"{tool}: {key}={value!r} is not a repository name")
+        words = _words(key)
+        kind = "".join(words)
+        if kind in _OWNER_KEYS:
+            if not isinstance(value, str) or not value:
+                raise SafetyRefusal(f"{tool}: {key}={value!r} is not an owner name")
+            owners.append(value)
+        elif kind in _REPO_KEYS or kind in _FULL_NAME_KEYS:
+            if not isinstance(value, str) or not value:
+                raise SafetyRefusal(f"{tool}: {key}={value!r} is not a repository name")
+            repos.append((key, value, kind in _REPO_KEYS))
+        elif kind in _REPO_ID_KEYS:
+            named.repo_ids.append((key, _plain_id(key, value, tool)))
+        elif _OWNER_WORDS.intersection(words):
+            raise SafetyRefusal(
+                f"{tool}: cannot interpret argument {key!r}, which may name an owner or "
+                "repository; refusing"
+            )
+    distinct = {o.casefold(): o for o in owners}
+    named.owners.extend(owners)
+    for key, value, bare_allowed in repos:
         if "/" in value:
             pair = _split(value, key, tool)
-        elif key != "full_name" and isinstance(owner, str) and owner:
-            pair = _split(f"{owner}/{value}", key, tool)
-        else:
+        elif not bare_allowed or not distinct:
             raise SafetyRefusal(
                 f"{tool}: cannot resolve {key}={value!r} to owner/name (no owner given)"
             )
-        pairs.append(pair)
-        owners.append(pair[0])
-    return owners, pairs
+        elif len(distinct) > 1:
+            raise SafetyRefusal(
+                f"{tool}: {key}={value!r} is ambiguous: several owners are given "
+                f"({', '.join(sorted(distinct.values()))})"
+            )
+        else:
+            pair = _split(f"{next(iter(distinct.values()))}/{value}", key, tool)
+        named.owners.append(pair[0])
+        if top:
+            named.top_pairs.append(pair)
 
 
-def _check_repositories(
-    value: Any, tool: str, allowed: set[str], top: bool = True
-) -> list[tuple[str, str]]:
-    """Refuse any non-allowlisted owner at any depth; return the top-level pairs."""
-    pairs: list[tuple[str, str]] = []
+def _walk(value: Any, tool: str, named: _Named, top: bool = True) -> None:
     if isinstance(value, dict):
-        owners, pairs = _repositories_at(value, tool)
-        for owner in owners:
-            if owner.casefold() not in allowed:
-                raise SafetyRefusal(f"{tool}: owner {owner!r} is not on the allowlist")
+        _level(value, tool, named, top)
         for child in value.values():
-            _check_repositories(child, tool, allowed, top=False)
+            _walk(child, tool, named, top=False)
     elif isinstance(value, (list, tuple)):
         for child in value:
-            _check_repositories(child, tool, allowed, top=False)
-    return pairs if top else []
+            _walk(child, tool, named, top=False)
 
 
 def _norm(key: str) -> str:
@@ -283,10 +344,9 @@ async def _resolve_ids(
     if not ids:
         raise SafetyRefusal(f"{tool}: an ID-only write tool with no ID argument to resolve")
     for key, raw in ids:
-        plain = isinstance(raw, (int, str)) and not isinstance(raw, bool)
-        if not plain or not _ID_VALUE.fullmatch(str(raw)):
-            raise SafetyRefusal(f"{tool}: {key}={raw!r} is not a plain ID")
-        value, norm = str(raw), _norm(key)
+        value, norm = _plain_id(key, raw, tool), _norm(key)
+        if norm in _REPO_ID_KEYS:
+            continue  # resolved for every tool by before_call
         if norm in _GLOBAL_IDS:
             owner, _ = await _resolve(rest, tool, key, _GLOBAL_IDS[norm], None, value)
             if owner.casefold() not in allowed:
@@ -320,8 +380,18 @@ def make_before_call(rest: GitHubRest, pack: Pack) -> Callable[[str, dict], Awai
             check_content(arguments, tool)
         except PackError as e:
             raise SafetyRefusal(str(e)) from None
-        pairs = _check_repositories(arguments, tool, allowed)
+        named = _Named()
+        _walk(arguments, tool, named)
+        for owner in named.owners:
+            if owner.casefold() not in allowed:
+                raise SafetyRefusal(f"{tool}: owner {owner!r} is not on the allowlist")
+        for key, value in named.repo_ids:
+            owner, _ = await _resolve(rest, tool, key, _REPOSITORY_BY_ID, None, value)
+            if owner.casefold() not in allowed:
+                raise SafetyRefusal(
+                    f"{tool}: {key}={value} belongs to {owner!r}, which is not on the allowlist"
+                )
         if tool in id_only:
-            await _resolve_ids(rest, tool, arguments, pairs, allowed)
+            await _resolve_ids(rest, tool, arguments, named.top_pairs, allowed)
 
     return before_call

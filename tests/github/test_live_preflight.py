@@ -57,11 +57,45 @@ async def test_user_repos_reflects_token_scope(rest):
 
 
 async def test_compensating_check_endpoints_answer(rest):
-    """Preflight step 4 needs these to answer for a repository-only token."""
-    for path, params in [("/user/orgs", None), ("/user/repos", {"affiliation": "owner"})]:
+    """Preflight step 4 needs these to answer for a repository-only token, and to report
+    the account's memberships rather than only what the token can see.
+
+    An empty or allowlisted answer alone cannot tell "the account has nothing else" from
+    "the token hides it". To tell them apart, temporarily give the test account one
+    membership outside the allowlist that the token was not granted, and name it:
+
+      MCP_ANNOTATION_CHECK_KNOWN_EXTRA_ORG    a throwaway organization the account joined
+      MCP_ANNOTATION_CHECK_KNOWN_OWNED_REPO   a throwaway repository the account owns
+                                              (owner/name), not selected for the token
+
+    Without them the test prints what was listed, and the comparison against the
+    account's web UI (Settings > Organizations, and the account's repository list)
+    must be done by hand.
+    """
+    probes = [
+        ("/user/orgs", None, "login", os.environ.get("MCP_ANNOTATION_CHECK_KNOWN_EXTRA_ORG")),
+        (
+            "/user/repos",
+            {"affiliation": "owner"},
+            "full_name",
+            os.environ.get("MCP_ANNOTATION_CHECK_KNOWN_OWNED_REPO"),
+        ),
+    ]
+    for path, params, field, known in probes:
+        label = f"GET {path}" + (f"?affiliation={params['affiliation']}" if params else "")
         try:
             data = await rest.get(path, params)
         except GitHubError as e:
-            print(f"\nOBSERVED: GET {path} {params or ''} failed with {e.status}")
+            print(f"\nOBSERVED: {label} failed with {e.status}")
             raise
-        print(f"\nOBSERVED: GET {path} {params or ''} answered with {len(data)} entries")
+        listed = sorted(str(item.get(field)) for item in data)
+        print(f"\nOBSERVED: {label} answered with {len(listed)} entries: {listed}")
+        if not known:
+            print(f"OBSERVED: {label}: no known extra entry named; compare with the web UI by hand")
+        elif known.casefold() in {x.casefold() for x in listed}:
+            print(f"OBSERVED: {label} lists {known}: it reports the account (step 4 is meaningful)")
+        else:
+            print(
+                f"OBSERVED: {label} hides {known}: it is filtered by the token "
+                "(step 4 passes vacuously)"
+            )
