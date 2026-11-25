@@ -155,3 +155,34 @@ def test_supplied_values_makes_frozenset_for_collections(tmp_path):
 
 def test_fake_pack_loads():
     assert load_pack(Path(__file__).parent.parent / "packs" / "fake.yaml").server == "fake"
+
+
+def test_read_fixtures_content_rejected(tmp_path):
+    p = write_pack(tmp_path, "  t1:\n    status: enabled\n", extra='read_fixtures: {body: "cc @someone"}\n')
+    with pytest.raises(PackError, match="read_fixtures"):
+        load_pack(p)
+
+
+def test_mention_in_dict_key_rejected(tmp_path):
+    p = write_pack(tmp_path, '  t1:\n    arguments: {"cc @someone": 1}\n')
+    with pytest.raises(PackError, match="t1"):
+        load_pack(p)
+
+
+def test_nested_bad_content_rejected(tmp_path):
+    for body in ('{a: [{b: "https://github.com/x/y"}]}', '{a: {b: ["see octo/repo#12"]}}'):
+        p = write_pack(tmp_path, f"  t1:\n    arguments: {body}\n")
+        with pytest.raises(PackError, match="t1"):
+            load_pack(p)
+
+
+def test_set_content_checked(tmp_path):
+    p = write_pack(tmp_path, '  t1:\n    arguments:\n      a: !!set {"cc @someone": null}\n')
+    with pytest.raises(PackError, match="t1"):
+        load_pack(p)
+
+
+def test_github_url_any_case_rejected(tmp_path):
+    p = write_pack(tmp_path, '  t1:\n    arguments: {body: "GitHub.com/owner/repo"}\n')
+    with pytest.raises(PackError, match="t1"):
+        load_pack(p)

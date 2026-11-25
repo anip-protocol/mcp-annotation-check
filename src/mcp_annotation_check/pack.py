@@ -72,14 +72,19 @@ def check_content(value: Any, tool: str) -> None:
             raise PackError(f"{tool}: argument text contains an @mention: {value!r}")
         if _XREF.search(value):
             raise PackError(f"{tool}: argument text contains a cross-repository reference: {value!r}")
-        if "github.com/" in value:
+        if "github.com/" in value.lower():
             raise PackError(f"{tool}: argument text contains a github.com URL: {value!r}")
-    elif isinstance(value, list):
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            check_content(k, tool)
+            check_content(v, tool)
+    elif isinstance(value, (list, tuple, set, frozenset)):
         for v in value:
             check_content(v, tool)
-    elif isinstance(value, dict):
-        for v in value.values():
-            check_content(v, tool)
+    elif value is None or isinstance(value, (bool, int, float)):
+        pass
+    else:
+        raise PackError(f"{tool}: unsupported value type {type(value).__name__}")
 
 
 def _fields(raw: Any, where: str) -> list[FieldSpec]:
@@ -141,6 +146,8 @@ def load_pack(path: Path) -> Pack:
     except KeyError as e:
         raise PackError(f"pack {path} is missing {e.args[0]}") from e
     tools = raw.get("tools") or {}
+    read_fixtures = dict(raw.get("read_fixtures") or {})
+    check_content(read_fixtures, "read_fixtures")
     return Pack(
         server=server,
         version=version,
@@ -149,7 +156,7 @@ def load_pack(path: Path) -> Pack:
         standard_read_only_fields=_fields(raw.get("standard_read_only_fields"), "pack"),
         entries={name: _entry(name, body) for name, body in tools.items()},
         id_only_write_tools=list(raw.get("id_only_write_tools") or []),
-        read_fixtures=dict(raw.get("read_fixtures") or {}),
+        read_fixtures=read_fixtures,
     )
 
 
