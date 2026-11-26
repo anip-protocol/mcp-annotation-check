@@ -101,6 +101,7 @@ async def test_write_repository_entry_without_fixture_snapshots_the_write_repo()
         allowlist=[],
         repositories=REPOS,
         standard_read_only_fields=[FieldSpec("repo.labels", FieldKind.COLLECTION)],
+        id_only_write_tools=["list_labels"],
         entries={"list_labels": ToolEntry(tool="list_labels")},  # repository: write, no fixture
     )
     async with Client(server) as client:
@@ -236,6 +237,7 @@ async def test_rest_error_mid_fixture_is_reported_and_cleanup_attempted():
         allowlist=[],
         repositories=REPOS,
         standard_read_only_fields=[],
+        id_only_write_tools=["add_labels"],
         entries={
             "add_labels": ToolEntry(
                 tool="add_labels",

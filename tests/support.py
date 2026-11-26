@@ -21,14 +21,20 @@ HEADER_CONTEXT = {
 
 
 def with_entries(pack: Pack, **entries: ToolEntry | None) -> Pack:
-    """A copy of pack with entries replaced, added, or (None) removed."""
+    """A copy of pack with entries replaced, added, or (None) removed.
+
+    Added entries take only fake issue IDs, so like the fake pack's own they are ID-only.
+    """
     merged = dict(pack.entries)
+    id_only = list(pack.id_only_write_tools)
     for name, entry in entries.items():
         if entry is None:
             merged.pop(name, None)
         else:
             merged[name] = entry
-    return replace(pack, entries=merged)
+            if name not in id_only:
+                id_only.append(name)
+    return replace(pack, entries=merged, id_only_write_tools=id_only)
 
 
 async def run_fake(

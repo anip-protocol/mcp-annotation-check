@@ -513,8 +513,11 @@ async def test_safety_refusal_stops_the_run_and_reports_are_written(tmp_path):
     store = FakeStore()
     pack = load_pack(FAKE_PACK)
     template = pack.entries["add_labels"]
+    names = ("first", "second", "third")
     pack = replace(
-        pack, entries={n: replace(template, tool=n) for n in ("first", "second", "third")}
+        pack,
+        entries={n: replace(template, tool=n) for n in names},
+        id_only_write_tools=list(names),
     )
     header, results = await run_fake(
         pack=pack, store=store, server=_three_tool_server(store), before_call=before_call

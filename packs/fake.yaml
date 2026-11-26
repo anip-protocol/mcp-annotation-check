@@ -8,6 +8,8 @@ standard_read_only_fields:
   - {path: issue.labels, kind: collection}
   - {path: issue.title, kind: scalar}
   - {path: issue.notes, kind: collection}
+# The fake server's tools take only issue IDs, so each is declared ID-only.
+id_only_write_tools: [get_issue, peek_and_touch, set_labels, add_labels, rename_issue, append_note, bump_hidden_counter, explode]
 # Every argument of every enabled tool declares its role (see pack.py).
 tools:
   get_issue:

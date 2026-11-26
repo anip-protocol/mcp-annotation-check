@@ -51,6 +51,7 @@ from mcp.types import Tool
 from mcp_annotation_check.argnames import looks_like_id, may_name_owner_or_repository
 from mcp_annotation_check.snapshot import FieldKind, FieldSpec
 
+REPOSITORY_ROLES = frozenset({"owner", "repository", "full_name", "repository_id"})
 ROLES = frozenset({"owner", "repository", "full_name", "repository_id", "id", "content", "other"})
 # The only value each of these roles may have in a pack.
 _PLACEHOLDER_ROLES = {
@@ -233,7 +234,7 @@ def validate_pack(pack: Pack, tools: list[Tool]) -> list[str]:
     Checked for every enabled entry (skipped entries are not validated): its role
     rules (as at load time, so entries built in code are covered too), that the tool
     is listed, that every input-schema property has a declared role and every role
-    names a property, and, for ID-only write tools, that nothing that looks like an
+    names a property, that it names a repository unless it is on `id_only_write_tools`, and, for ID-only write tools, that nothing that looks like an
     ID is declared anything but `id` or `repository_id`. Warnings are separate: see
     `pack_warnings`.
     """
@@ -262,6 +263,11 @@ def validate_pack(pack: Pack, tools: list[Tool]) -> list[str]:
             for r in roles
             if r not in properties
         ]
+        if name not in id_only and not any(r in REPOSITORY_ROLES for r in roles.values()):
+            problems.append(
+                f"{name}: no argument names a repository (owner, repository, full_name or "
+                "repository_id role), so the tool must be on id_only_write_tools"
+            )
         if name in id_only:
             problems += [
                 f"{name}: {p!r} looks like an ID of an ID-only write tool but is declared "

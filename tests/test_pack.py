@@ -424,7 +424,7 @@ def test_validate_pack_rechecks_entries_built_in_code(tmp_path):
 
 def test_entry_without_roles_is_a_problem():
     pack = load_pack(Path(__file__).parent.parent / "packs" / "fake.yaml")
-    pack = replace(pack, entries={"t1": ToolEntry(tool="t1")})
+    pack = replace(pack, entries={"t1": ToolEntry(tool="t1")}, id_only_write_tools=["t1"])
     assert validate_pack(pack, [tool("t1", "issue_id")]) == [
         "t1: input-schema property 'issue_id' has no declared role"
     ]
@@ -446,7 +446,8 @@ def test_id_only_tool_with_an_id_declared_otherwise_is_a_problem(tmp_path):
 @pytest.mark.parametrize("role", ["content", "other", "id"])
 @pytest.mark.parametrize("prop", ["target_owner", "newowner", "org", "repoName", "ownér", "nwo"])
 def test_owner_like_property_declared_harmless_is_a_warning(tmp_path, role, prop):
-    pack = load_pack(write_pack(tmp_path, f'  t1:\n    argument_roles: {{"{prop}": {role}}}\n'))
+    body = f'  t1:\n    argument_roles: {{"{prop}": {role}}}\n'
+    pack = load_pack(write_pack(tmp_path, body, extra="id_only_write_tools: [t1]\n"))
     tools = [tool("t1", prop)]
     assert validate_pack(pack, tools) == []  # a warning is not a problem
     assert pack_warnings(pack) == [
@@ -459,3 +460,22 @@ def test_owner_like_property_declared_harmless_is_a_warning(tmp_path, role, prop
 def test_harmless_property_names_give_no_warning(tmp_path, prop):
     pack = load_pack(write_pack(tmp_path, f"  t1:\n    argument_roles: {{{prop}: content}}\n"))
     assert pack_warnings(pack) == []
+
+
+def test_enabled_entry_naming_no_repository_must_be_id_only(tmp_path):
+    body = "  t1:\n    argument_roles: {issue_number: id, text: content}\n"
+    tools = [tool("t1", "issue_number", "text")]
+    flagged = validate_pack(load_pack(write_pack(tmp_path, body)), tools)
+    assert flagged == [
+        "t1: no argument names a repository (owner, repository, full_name or repository_id "
+        "role), so the tool must be on id_only_write_tools"
+    ]
+    listed = write_pack(tmp_path, body, extra="id_only_write_tools: [t1]\n")
+    assert validate_pack(load_pack(listed), tools) == []
+
+
+@pytest.mark.parametrize("role", ["owner", "repository", "full_name", "repository_id"])
+def test_a_repository_role_satisfies_the_rule(tmp_path, role):
+    pack = load_pack(write_pack(tmp_path, f"  t1:\n    argument_roles: {{x: {role}}}\n"))
+    problems = validate_pack(pack, [tool("t1", "x")])
+    assert not any("names a repository" in p or "no argument names" in p for p in problems)
