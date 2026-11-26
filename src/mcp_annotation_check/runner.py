@@ -1,15 +1,16 @@
 """Serial runner: plan every listed tool, then judge enabled ones one at a time.
 
-Per judged tool: fixture, arguments, settled before-snapshot, call, settled after-snapshot
-(taken even when the call errored), rules, a second call for the idempotent check,
-and cleanup in a `finally`. A call that errored is judged like any other: a change
-against the claim is a FINDING (or OBSERVATION), but with no such change the tool is
-an ERROR ("call failed; no change observed in ..."), never a PASS. A failure at any step is an ERROR for that tool only,
-with one exception: a refusal by `before_call` (the per-call safety check) stops the
-run. The refused tool is an ERROR and every remaining tool is SKIPPED with
-"run stopped after a safety refusal on <tool>"; the results are still returned so the
-reports can be written. Any exception from `before_call` counts as a refusal, since a
-safety check that fails to run has not passed.
+Per judged tool: fixture, arguments, settled before-snapshot, call, settled
+after-snapshot (taken even when the call errored), rules, a second call for the
+idempotent check, and cleanup in a `finally`. A call that errored is judged like any
+other: a change against the claim is a FINDING (or OBSERVATION), but with no such
+change the tool is an ERROR ("call failed; no change observed in ..."), never a PASS.
+A failure at any step is an ERROR for that tool only, with one exception: a refusal
+by `before_call` (the per-call safety check) stops the run. The refused tool is an
+ERROR and every remaining tool is SKIPPED with "run stopped after a safety refusal
+on <tool>"; the results are still returned so the reports can be written. Any
+exception from `before_call` counts as a refusal, since a safety check that fails to
+run has not passed.
 """
 
 import dataclasses
