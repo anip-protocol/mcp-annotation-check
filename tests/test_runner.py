@@ -10,7 +10,7 @@ from mcp_annotation_check.fake.server import FakeStore, build_fake_server
 from mcp_annotation_check.pack import load_pack
 from mcp_annotation_check.report import write_reports
 from mcp_annotation_check.rules import Outcome
-from mcp_annotation_check.runner import CUSTOM_SETUPS, CUSTOM_VERDICTS, ToolResult
+from mcp_annotation_check.runner import CUSTOM_SETUPS, CUSTOM_VERDICTS, ToolResult, run
 from mcp_annotation_check.settle import SettleTimeout, settle
 from mcp_annotation_check.snapshot import Recorded, Verdict
 from support import FAKE_PACK, run_fake, with_entries
@@ -457,3 +457,92 @@ async def test_header_from_client_and_pack():
     assert header.standard_read_only_fields == ["issue.labels", "issue.title", "issue.notes"]
     assert [t["name"] for t in header.tools_list][0] == "get_issue"
     assert len(header.tools_list_sha256) == 64
+
+
+# --- a failed call that changed nothing is ERROR (ruling R19) -------------------
+
+
+def _server_with(store: FakeStore, name: str, annotations: ToolAnnotations):
+    server = build_fake_server(store)
+
+    @server.tool(name=name, annotations=annotations)
+    def failing(issue_id: str) -> str:
+        raise RuntimeError(f"{name}: failed before changing anything")
+
+    return server
+
+
+def _pack_with(name: str, fields: list | None):
+    pack = load_pack(FAKE_PACK)
+    template = pack.entries["get_issue"]
+    entry = replace(template, tool=name, fields=fields if fields is not None else [])
+    return with_entries(pack, **{name: entry})
+
+
+async def test_failed_non_destructive_call_with_no_change_is_error():
+    store = FakeStore()
+    server = _server_with(store, "fail_quietly", ToolAnnotations(destructive_hint=False))
+    labels = load_pack(FAKE_PACK).entries["set_labels"].fields
+    _, results = await run_fake(pack=_pack_with("fail_quietly", labels), store=store, server=server)
+    got = by_tool(results)["fail_quietly"]
+    assert got.outcome is Outcome.ERROR
+    assert got.error.startswith("call failed; no change observed in issue.labels")
+    assert "tool returned an error: Error executing tool fail_quietly" in got.error
+    (verdict,) = got.verdicts  # kept as evidence
+    assert verdict.check is Check.NON_DESTRUCTIVE and verdict.outcome is Outcome.PASS
+    assert got.calls[0]["is_error"] is True
+
+
+async def test_failed_read_only_call_with_no_change_is_error():
+    store = FakeStore()
+    server = _server_with(store, "fail_reading", ToolAnnotations(read_only_hint=True))
+    _, results = await run_fake(pack=_pack_with("fail_reading", None), store=store, server=server)
+    got = by_tool(results)["fail_reading"]
+    assert got.outcome is Outcome.ERROR
+    assert got.error.startswith(
+        "call failed; no change observed in issue.labels, issue.title, issue.notes"
+    )
+    (verdict,) = got.verdicts
+    assert verdict.check is Check.READ_ONLY and verdict.outcome is Outcome.PASS
+
+
+class _RaisingClient:
+    """Delegates to a real client, but call_tool raises for one tool."""
+
+    def __init__(self, client, tool: str, secret: str) -> None:
+        self._client, self._tool, self._secret = client, tool, secret
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+    async def call_tool(self, name, arguments):
+        if name == self._tool:
+            raise ConnectionError(f"transport dropped (token {self._secret})")
+        return await self._client.call_tool(name, arguments)
+
+
+async def test_call_tool_raising_with_no_change_is_error():
+    from mcp import Client
+
+    from support import HEADER_CONTEXT
+
+    store = FakeStore()
+    secret = "s3cret-token-value"
+    async with Client(build_fake_server(store)) as client:
+        _, results = await run(
+            _RaisingClient(client, "set_labels", secret),
+            FakeReader(store),
+            load_pack(FAKE_PACK),
+            HEADER_CONTEXT,
+            settle_interval_s=0.01,
+            settle_timeout_s=0.3,
+            secrets=[secret],
+        )
+    got = by_tool(results)
+    assert got["set_labels"].outcome is Outcome.ERROR
+    error = got["set_labels"].error
+    assert error.startswith("call failed; no change observed in issue.labels")
+    assert "ConnectionError: transport dropped" in error
+    assert secret not in error
+    assert got["set_labels"].verdicts  # kept as evidence
+    assert got["add_labels"].outcome is Outcome.PASS

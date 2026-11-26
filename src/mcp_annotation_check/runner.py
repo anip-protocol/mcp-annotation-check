@@ -2,7 +2,9 @@
 
 Per judged tool: fixture, arguments, before-snapshot, call, settled after-snapshot
 (taken even when the call errored), rules, a second call for the idempotent check,
-and cleanup in a `finally`. A failure at any step is an ERROR for that tool only,
+and cleanup in a `finally`. A call that errored is judged like any other: a change
+against the claim is a FINDING (or OBSERVATION), but with no such change the tool is
+an ERROR ("call failed; no change observed in ..."), never a PASS. A failure at any step is an ERROR for that tool only,
 with one exception: a refusal by `before_call` (the per-call safety check) stops the
 run. The refused tool is an ERROR and every remaining tool is SKIPPED with
 "run stopped after a safety refusal on <tool>"; the results are still returned so the
@@ -235,6 +237,7 @@ class _ToolCheck:
         self.verdicts: list[Verdict] = []
         self.calls: list[dict] = []
         self.errors: list[str] = []
+        self.call_failed = False
         self.waited_s = 0.0
         self.refused = False
 
@@ -285,11 +288,19 @@ class _ToolCheck:
                     await self.reader.cleanup(self.entry, self.fixture)
                 except Exception as e:
                     self.errors.append(self._redact(f"cleanup failed: {type(e).__name__}: {e}"))
+        outcome = Outcome.ERROR if failed else _most_severe(self.verdicts)
+        if not failed and self.call_failed and not any(
+            v.outcome in (Outcome.FINDING, Outcome.OBSERVATION) for v in self.verdicts
+        ):
+            # A failed call that changed nothing has not shown the claim true: it is an
+            # ERROR, not a PASS. The verdicts stay as evidence.
+            outcome = Outcome.ERROR
+            self.errors.insert(0, self._no_change_text())
         return ToolResult(
             tool=self.tool.name,
             description=self.tool.description or "",
             claims=self.claims,
-            outcome=Outcome.ERROR if failed else _most_severe(self.verdicts),
+            outcome=outcome,
             verdicts=self.verdicts,
             skip_reason=None,
             error="; ".join(self.errors) or None,
@@ -303,6 +314,18 @@ class _ToolCheck:
 
     def _redact(self, text: str) -> str:
         return redact(text, self.secrets)
+
+    def _no_change_text(self) -> str:
+        """What the verdicts of a failed call observed, for its ERROR text."""
+        compared = _union(self.fields[v.check] for v in self.verdicts)
+        differing = [f.path for f in compared if any(f.path in v.diff for v in self.verdicts)]
+        unchanged = [f.path for f in compared if f.path not in differing]
+        text = "call failed"
+        if unchanged:
+            text += f"; no change observed in {', '.join(unchanged)}"
+        if differing:
+            text += f"; changed: {', '.join(differing)}"
+        return text
 
     async def _read(self) -> Recorded:
         return await self.reader.snapshot(self.snapshot_fields, self.fixture)
@@ -329,6 +352,7 @@ class _ToolCheck:
                 {"tool": name, "arguments": arguments, "is_error": True, "content": text}
             )
             self.errors.append(f"call raised {text}")
+            self.call_failed = True
             return
         text = self._redact(_content_text(result.content))
         is_error = bool(result.is_error)
@@ -337,6 +361,7 @@ class _ToolCheck:
         )
         if is_error:
             self.errors.append(f"tool returned an error: {text}")
+            self.call_failed = True
 
     def _judge(self, check: Check, before: Recorded, after: Recorded) -> Verdict:
         fields = self.fields[check]
