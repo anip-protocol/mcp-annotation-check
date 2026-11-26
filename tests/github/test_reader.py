@@ -4,6 +4,7 @@ import httpx
 import pytest
 
 from mcp import Client
+from mcp.types import ToolAnnotations
 from mcp_annotation_check.fake.server import FakeStore, build_fake_server
 from mcp_annotation_check.github.reader import GitHubReader
 from mcp_annotation_check.github.rest import GitHubError, GitHubRest
@@ -73,17 +74,47 @@ async def test_snapshot_issue_fields():
     assert rec.timestamps == {"issue": "2026-01-01T00:00:00Z"}
 
 
-async def test_snapshot_falls_back_to_read_repository():
-    seen = []
+async def test_snapshot_requires_the_fixture_repository():
+    reader, calls = make(lambda r: httpx.Response(200, json=[]))
+    with pytest.raises(ValueError, match="names no 'repository'"):
+        await reader.snapshot([FieldSpec("repo.labels", FieldKind.COLLECTION)], {})
+    assert calls == []
+
+
+async def test_write_repository_entry_without_fixture_snapshots_the_write_repo():
+    seen: list[str] = []
 
     def handler(request):
         seen.append(request.url.path)
         return httpx.Response(200, json=[{"name": "bug", "color": "f00", "description": None}])
 
-    reader, _ = make(handler)
-    rec = await reader.snapshot([FieldSpec("repo.labels", FieldKind.COLLECTION)], {})
-    assert seen == ["/repos/o/read/labels"]
-    assert rec.snapshot["repo.labels"] == frozenset({("bug", "f00", None)})
+    rest = GitHubRest(TOKEN, transport=httpx.MockTransport(handler))
+    server = build_fake_server(FakeStore())
+
+    @server.tool(name="list_labels", annotations=ToolAnnotations(read_only_hint=True))
+    def list_labels() -> str:
+        return "bug"
+
+    pack = Pack(
+        server="s",
+        version="0",
+        allowlist=[],
+        repositories=REPOS,
+        standard_read_only_fields=[FieldSpec("repo.labels", FieldKind.COLLECTION)],
+        entries={"list_labels": ToolEntry(tool="list_labels")},  # repository: write, no fixture
+    )
+    async with Client(server) as client:
+        _, results = await run(
+            client,
+            GitHubReader(rest, REPOS),
+            pack,
+            HEADER_CONTEXT,
+            settle_interval_s=0.01,
+            settle_timeout_s=0.3,
+        )
+    result = next(r for r in results if r.tool == "list_labels")
+    assert result.outcome is Outcome.PASS
+    assert seen and set(seen) == {"/repos/o/write/labels"}
 
 
 async def test_pagination_follows_link_header():

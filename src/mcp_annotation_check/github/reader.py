@@ -124,7 +124,10 @@ class GitHubReader:
     # --- snapshots --------------------------------------------------------
 
     async def snapshot(self, fields: list[FieldSpec], fixture: dict[str, Any]) -> Recorded:
-        repo = fixture.get("repository") or self.repositories["read"]
+        # The runner always sets the entry's repository (ruling R20); never guess one.
+        repo = fixture.get("repository")
+        if not repo:
+            raise ValueError("snapshot fixture names no 'repository'")
         snap: dict[str, Any] = {}
         stamps: dict[str, str] = {}
         cache: dict[str, Any] = {}

@@ -373,6 +373,24 @@ async def test_read_repository_entry_without_fixture_uses_read_fixtures():
     assert issue_id in store.issues  # read fixtures are never cleaned up
 
 
+async def test_every_snapshot_fixture_names_the_entry_repository():
+    seen: dict[str, set] = {}
+
+    class Recording(FakeReader):
+        async def snapshot(self, fields, fixture):
+            seen.setdefault(fixture["issue_id"], set()).add(fixture.get("repository"))
+            return await super().snapshot(fields, fixture)
+
+    store = FakeStore()
+    issue_id = store.create_issue()
+    pack = load_pack(FAKE_PACK)
+    entry = replace(pack.entries["get_issue"], fixture=None, repository="read")
+    pack = replace(with_entries(pack, get_issue=entry), read_fixtures={"issue_id": issue_id})
+    await run_fake(pack=pack, store=store, reader=Recording(store))
+    assert seen.pop(issue_id) == {"owner/read-repo"}
+    assert seen and all(repos == {"owner/write-repo"} for repos in seen.values())
+
+
 async def test_custom_setup_replaces_create_fixture(monkeypatch):
     calls: list[str] = []
 

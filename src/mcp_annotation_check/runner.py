@@ -259,6 +259,11 @@ class _ToolCheck:
                 self.fixture = await self.reader.create_fixture(self.entry, self.run_id)
             elif self.entry.repository == "read":
                 self.fixture = dict(self.pack.read_fixtures)
+            if self.entry.repository in self.pack.repositories:
+                # The reader observes the entry's own repository, never a default one.
+                self.fixture.setdefault(
+                    "repository", self.pack.repositories[self.entry.repository]
+                )
             step = "argument rendering"
             self.arguments = render_arguments(self.entry, self.fixture, self.pack.repositories)
             step = "before-snapshot"
