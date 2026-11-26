@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -77,9 +78,27 @@ def _token() -> str:
     return token
 
 
+def _causes(error: BaseException, depth: int = 0) -> list[str]:
+    """One line per error: exception groups are unwrapped (recursively, indented), and
+    a failed subprocess shows its stderr, which is where docker explains itself."""
+    pad = "  " * depth
+    if isinstance(error, BaseExceptionGroup):
+        lines = [f"{pad}{type(error).__name__}: {error.message}"]
+        for inner in error.exceptions:
+            lines += _causes(inner, depth + 1)
+        return lines
+    text = f"{pad}{type(error).__name__}: {error}"
+    if isinstance(error, subprocess.CalledProcessError) and error.stderr:
+        stderr = error.stderr
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        text += f" (stderr: {' '.join(str(stderr).split())})"
+    return [text]
+
+
 def _fail(error: BaseException, token: str | None) -> int:
     """Print an error through `redact` (never a raw traceback); return the exit code."""
-    text = f"error: {type(error).__name__}: {error}"
+    text = "error: " + "\n".join(_causes(error))
     print(redact(text, [token] if token else []), file=sys.stderr)
     return 1
 
