@@ -260,3 +260,5 @@ These changes replace the matching parts above where they conflict.
 - Per call, an argument with no declared role is refused, and each value is checked by its role.
 
 **Shakedown before the first live run.** A `shakedown` command runs the preflight, starts the server, reads `tools/list`, validates the pack and takes one read-only snapshot. It never calls a tool and never creates a fixture. It is meant for a read-only token first: it exercises the preflight, launcher and reader with no write possible. Real verdicts need the read-write token afterwards, because a mislabelled tool would just fail on permission.
+
+**When a finding is withheld (owner's decision).** A public report listing every other tool would reveal the withheld one by elimination, so the full sweep report is held until the server's maintainers fix the tool or 90 days pass, whichever comes first. The label reproduction is posted on #10 straight away: it is already public as github/github-mcp-server#3760.
