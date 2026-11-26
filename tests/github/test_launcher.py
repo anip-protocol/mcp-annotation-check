@@ -206,8 +206,8 @@ def test_run_success_path_passes_secrets_closes_rest_and_keeps_token_off_args(
 
     assert cli.main(_run_args(tmp_path)) == 0
     assert seen["rest_token"] == TOKEN
-    # The harness's own REST writes are limited to the pack's repositories.
-    assert sorted(seen["write_repositories"]) == ["owner/read-repo", "owner/write-repo"]
+    # The harness's own REST writes are limited to the pack's write repository.
+    assert list(seen["write_repositories"]) == ["owner/write-repo"]
     assert seen["closed"] is True
     assert seen["run_kwargs"]["secrets"] == [TOKEN]
     assert seen["context"]["image_digest"] == "img@sha256:abc"
@@ -291,3 +291,66 @@ def test_run_exits_nonzero_after_an_early_stop(monkeypatch, tmp_path, problems, 
 
     monkeypatch.setattr(cli, "_run_github", fake_run_github)
     assert cli.main(_run_args(tmp_path)) == code
+
+
+def test_run_exits_2_when_the_rest_guard_refuses_a_fixture_write(monkeypatch, tmp_path, capsys):
+    """End to end through `run`: the real guarded client refuses the reader's write to
+    the read repository, the run stops, later tools are skipped and the exit code is 2."""
+    import json
+
+    import httpx
+    from mcp import Client
+
+    from mcp_annotation_check.fake.reader import FakeReader
+    from mcp_annotation_check.fake.server import FakeStore, build_fake_server
+    from mcp_annotation_check.github.rest import GitHubRest
+
+    monkeypatch.setenv(ENV, TOKEN)
+    store = FakeStore()
+    sent: list[tuple[str, str]] = []
+
+    def handle(request):
+        sent.append((request.method, request.url.path))
+        return httpx.Response(201, json={"number": 1})
+
+    class MockedRest(GitHubRest):
+        def __init__(self, token, transport=None, write_repositories=None):
+            super().__init__(
+                token, transport=httpx.MockTransport(handle), write_repositories=write_repositories
+            )
+
+    class WritingReader(FakeReader):
+        """Writes to the read repository when setting up set_labels' fixture."""
+
+        def __init__(self, rest, repositories):
+            super().__init__(store)
+            self.rest = rest
+
+        async def create_fixture(self, entry, run_id):
+            if entry.tool == "set_labels":
+                await self.rest.post("/repos/owner/read-repo/issues", {"title": "t"})
+            return await super().create_fixture(entry, run_id)
+
+    async def no_check(tool, arguments):
+        return None
+
+    monkeypatch.setattr(cli, "GitHubRest", MockedRest)
+    monkeypatch.setattr(cli, "GitHubReader", WritingReader)
+    monkeypatch.setattr(cli, "Client", lambda params: Client(build_fake_server(store)))
+    monkeypatch.setattr(cli, "preflight", _passing_preflight)
+    monkeypatch.setattr(cli, "image_digest", lambda image: "img@sha256:abc")
+    monkeypatch.setattr(cli, "make_before_call", lambda rest, pack: no_check)
+
+    fast = ["--settle-interval", "0.001", "--settle-timeout", "0.3"]
+    assert cli.main(_run_args(tmp_path) + fast) == 2
+    assert sent == []  # the refused write never left the client
+    results = {r["tool"]: r for r in json.loads((tmp_path / "report.json").read_text())["results"]}
+    assert results["set_labels"]["outcome"] == "error"
+    assert "refusing POST /repos/owner/read-repo/issues" in results["set_labels"]["error"]
+    order = list(results)
+    later = order[order.index("set_labels") + 1 :]
+    assert later
+    for tool in later:
+        assert results[tool]["outcome"] == "skipped"
+        assert results[tool]["skip_reason"] == "run stopped after a safety refusal on set_labels"
+    assert TOKEN not in capsys.readouterr().out

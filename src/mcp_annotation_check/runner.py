@@ -15,12 +15,14 @@ change the tool is an ERROR ("call failed; no change observed in ..."), never a 
 A non-destructive check over composite fields (snapshot.COMPOSITE_FIELDS) is UNJUDGED
 unless its plain fields show a FINDING; a FINDING outranks every other outcome.
 A failure at any step is an ERROR for that tool only (unless a FINDING was already
-recorded, which stays a FINDING), with one exception: a refusal
-by `before_call` (the per-call safety check) stops the run. The refused tool is an
-ERROR and every remaining tool is SKIPPED with "run stopped after a safety refusal
-on <tool>"; the results are still returned so the reports can be written. Any
-exception from `before_call` counts as a refusal, since a safety check that fails to
-run has not passed.
+recorded, which stays a FINDING), with two exceptions that stop the run: a refusal
+by `before_call` (the per-call safety check), and a `RestRefused` from the REST
+write guard during fixture setup or cleanup (the harness's own write left the pack's
+write repository). The refused tool is an ERROR (or a FINDING already recorded) and
+every remaining tool is SKIPPED with "run stopped after a safety refusal on <tool>";
+the refused tool is still cleaned up, and the results are still returned so the
+reports can be written. Any exception from `before_call` counts as a refusal, since
+a safety check that fails to run has not passed.
 """
 
 import dataclasses
@@ -37,6 +39,7 @@ from mcp.types import Tool
 
 from mcp_annotation_check import __version__
 from mcp_annotation_check.claims import SCHEMA_TEXT, Check, Claims, applicable_checks, claims_of
+from mcp_annotation_check.github.rest import RestRefused
 from mcp_annotation_check.pack import (
     Pack,
     ToolEntry,
@@ -247,7 +250,8 @@ async def _check_tool(
     timeout_s: float,
     secrets: tuple[str, ...],
 ) -> tuple[ToolResult, bool]:
-    """The tool's result, and whether before_call refused one of its calls."""
+    """The tool's result, and whether a safety refusal (before_call, or the REST write
+    guard during fixture setup or cleanup) means the run must stop."""
     claims = claims_of(tool)
     checks = applicable_checks(claims)
     entry = pack.entries.get(tool.name)
@@ -346,13 +350,16 @@ class _ToolCheck:
                 self.verdicts.append(self._judge(Check.IDEMPOTENT, after, after_second))
         except Exception as e:
             failed = True
-            self.refused = isinstance(e, _CallRefused)
+            # The REST write guard refusing a fixture write is a safety refusal too.
+            self.refused = isinstance(e, (_CallRefused, RestRefused))
             self.errors.append(self._redact(_describe(step, e)))
         finally:
             if needs_cleanup:
                 try:
                     await self.reader.cleanup(self.entry, self.fixture)
                 except Exception as e:
+                    if isinstance(e, RestRefused):
+                        failed = self.refused = True
                     self.errors.append(self._redact(f"cleanup failed: {type(e).__name__}: {e}"))
         if failed:
             # A FINDING already recorded outranks the later failure (Amendment 1); the

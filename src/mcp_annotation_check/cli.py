@@ -129,8 +129,12 @@ def rest_for_run(
     token: str, pack: Pack, transport: httpx.AsyncBaseTransport | None = None
 ) -> GitHubRest:
     """The REST client for `run`: its own writes (fixtures, cleanup) may only reach
-    the pack's repositories."""
-    return GitHubRest(token, transport=transport, write_repositories=pack.repositories.values())
+    the pack's write repository. The read repository holds fixed, hand-made fixtures
+    and is never written to (and a pack with no write repository may write nowhere)."""
+    write = pack.repositories.get("write")
+    return GitHubRest(
+        token, transport=transport, write_repositories=[write] if write is not None else []
+    )
 
 
 def rest_for_shakedown(

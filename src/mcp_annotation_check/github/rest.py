@@ -6,9 +6,11 @@ request other than GET whose path is not strictly inside one of those repositori
 be a plain relative API path: no scheme or host, no query or fragment, no `%`
 escapes or backslashes, and no empty, `.` or `..` segments, so it cannot be
 normalised into another repository. The refusal is `RestRefused`, which is not a
-`GitHubError` (nothing was sent, so there is no status). `run` builds its client with
-the pack's repositories; `shakedown` with none, so it refuses every write. GET is
-never restricted: preflight and the reader only read.
+`GitHubError` (nothing was sent, so there is no status), and the runner treats it as
+a safety refusal: the run stops. `run` builds its client with the pack's write
+repository only (the read repository's fixtures are made by hand and never
+written); `shakedown` with none, so it refuses every write. GET is never
+restricted: preflight and the reader's snapshots only read.
 """
 
 import re

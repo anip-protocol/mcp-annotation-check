@@ -101,7 +101,7 @@ def _pack() -> Pack:
     )
 
 
-async def test_run_client_writes_only_to_the_pack_repositories():
+async def test_run_client_writes_only_to_the_write_repository():
     recorder = Recorder()
     rest = rest_for_run(TOKEN, _pack(), transport=recorder.transport)
     await rest.post(f"/repos/{WRITE}/issues", {"title": "t"})
@@ -109,6 +109,18 @@ async def test_run_client_writes_only_to_the_pack_repositories():
         await rest.post("/repos/test-org/other-repo/issues", {"title": "t"})
     await rest.aclose()
     assert [r.url.path for r in recorder.requests] == [f"/repos/{WRITE}/issues"]
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+async def test_run_client_refuses_writes_to_the_read_repository(method):
+    # The read repository holds fixed, hand-made fixtures; the harness never writes there.
+    recorder = Recorder()
+    rest = rest_for_run(TOKEN, _pack(), transport=recorder.transport)
+    with pytest.raises(RestRefused, match=f"refusing {method} /repos/{READ}/"):
+        await write(rest, method, f"/repos/{READ}/issues/1")
+    await rest.get(f"/repos/{READ}/labels")  # reading it is fine
+    await rest.aclose()
+    assert [r.method for r in recorder.requests] == ["GET"]
 
 
 @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])

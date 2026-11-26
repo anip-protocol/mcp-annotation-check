@@ -540,6 +540,62 @@ async def test_safety_refusal_stops_the_run_and_reports_are_written(tmp_path):
     assert "run stopped after a safety refusal on second" in (tmp_path / "report.md").read_text()
 
 
+class RefusingReader(FakeReader):
+    """Its REST client refuses a write for one tool, at fixture setup or at cleanup."""
+
+    def __init__(self, store: FakeStore, tool: str, at: str) -> None:
+        super().__init__(store)
+        self.tool, self.at = tool, at
+        self.cleaned: list[str] = []
+
+    async def create_fixture(self, entry, run_id):
+        from mcp_annotation_check.github.rest import RestRefused
+
+        if entry.tool == self.tool and self.at == "setup":
+            raise RestRefused("POST", "/repos/owner/read-repo/issues")
+        return await super().create_fixture(entry, run_id)
+
+    async def cleanup(self, entry, fixture):
+        from mcp_annotation_check.github.rest import RestRefused
+
+        self.cleaned.append(entry.tool)
+        await super().cleanup(entry, fixture)
+        if entry.tool == self.tool and self.at == "cleanup":
+            raise RestRefused("PATCH", "/repos/owner/read-repo/issues/1")
+
+
+def _three_tool_pack():
+    pack = load_pack(FAKE_PACK)
+    template = pack.entries["add_labels"]
+    names = ("first", "second", "third")
+    return replace(
+        pack,
+        entries={n: replace(template, tool=n) for n in names},
+        id_only_write_tools=list(names),
+    )
+
+
+@pytest.mark.parametrize("at", ["setup", "cleanup"])
+async def test_rest_refusal_in_fixture_setup_or_cleanup_stops_the_run(tmp_path, at):
+    store = FakeStore()
+    reader = RefusingReader(store, "second", at)
+    header, results = await run_fake(
+        pack=_three_tool_pack(), store=store, reader=reader, server=_three_tool_server(store)
+    )
+    got = by_tool(results)
+    assert [r.tool for r in results] == ["first", "second", "third"]
+    assert got["first"].outcome is Outcome.PASS
+    assert got["second"].outcome is Outcome.ERROR
+    assert "RestRefused" in got["second"].error
+    assert "refusing" in got["second"].error
+    assert got["third"].outcome is Outcome.SKIPPED
+    assert got["third"].skip_reason == "run stopped after a safety refusal on second"
+    assert got["third"].calls == []
+    assert reader.cleaned == ["first", "second"]  # the refused tool is still cleaned up
+    write_reports(header, results, tmp_path)
+    assert "run stopped after a safety refusal on second" in (tmp_path / "report.md").read_text()
+
+
 async def test_read_repository_entry_without_fixture_uses_read_fixtures():
     store = FakeStore()
     issue_id = store.create_issue()
