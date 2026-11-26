@@ -64,6 +64,12 @@ those declarations against tools/list before the first call. Per call:
     (`orgs`, `user_id`, `owner_type`, `newowner`, `targetrepo`, …), except the
     known-harmless `report`, `reports` and `reporter`; a non-string value; a bare
     name with no owner or several owners; and a malformed name.
+  - Tools on the pack's `no_target_tools` list name no repository by declaration
+    (`get_me`, a query-only search): every top-level argument must have the
+    `content` or `other` role, and one with any other role is refused before any REST
+    request, even if it names an allowlisted owner or a pack repository. Content
+    values are still walked as above. `validate_pack` already checked the declared
+    roles; this re-checks the rendered arguments.
   - Tools on the pack's `id_only_write_tools` list have their `id`-role arguments
     resolved to an owner through REST before the call:
       * global IDs resolve on their own: `repository_id`/`repo_id`
@@ -76,8 +82,10 @@ those declarations against tools/list before the first call. Per call:
         and the object found must report that same repository (a transferred issue's
         redirect does not, and is refused);
       * an `id`-role argument with no resolver above is refused, as is an ID-only
-        tool with no `id` or `repository_id` argument at all, and an argument whose
-        name looks like an ID (`id`, `…id`, `…number`) declared with any other role.
+        tool with no `id` or `repository_id` argument at all (`validate_pack` already
+        refuses an ID-only entry with no such role, so this catches an entry whose ID
+        argument is declared but not passed), and an argument whose name looks like an
+        ID (`id`, `…id`, `…number`) declared with any other role.
     A failed lookup (any HTTP error) refuses the call.
   - Search queries are never rewritten or parsed: changing them would change what is
     being tested, and a search reads, it cannot write.
@@ -100,7 +108,7 @@ from mcp_annotation_check.argnames import (
     words,
 )
 from mcp_annotation_check.github.rest import GitHubRest
-from mcp_annotation_check.pack import Pack, PackError, check_content
+from mcp_annotation_check.pack import NO_TARGET_ROLES, Pack, PackError, check_content
 from mcp_annotation_check.redact import redact
 
 CLASSIC_PREFIXES = ("ghp_", "gho_", "ghu_", "ghs_")
@@ -416,6 +424,16 @@ async def _resolve(
     )
 
 
+def _no_target_declarations(tool: str, arguments: dict, roles: dict[str, str]) -> None:
+    """A no-target tool may pass only content and other arguments."""
+    for key in arguments:
+        if roles[key] not in NO_TARGET_ROLES:
+            raise SafetyRefusal(
+                f"{tool}: on no_target_tools, so argument {key!r} must be content or other, "
+                f"not {roles[key]!r}; refusing"
+            )
+
+
 def _id_only_declarations(tool: str, arguments: dict, roles: dict[str, str]) -> None:
     """Before any REST lookup: an ID-only tool's IDs must all be declared as IDs."""
     for key in arguments:
@@ -472,6 +490,7 @@ async def _resolve_ids(
 def make_before_call(rest: GitHubRest, pack: Pack) -> Callable[[str, dict], Awaitable[None]]:
     allowed = _allowed(pack)
     id_only = set(pack.id_only_write_tools)
+    no_target = set(pack.no_target_tools)
     repositories = {r.lower() for r in pack.repositories.values() if r.isascii()}
 
     async def before_call(tool: str, arguments: dict) -> None:
@@ -487,6 +506,8 @@ def make_before_call(rest: GitHubRest, pack: Pack) -> Callable[[str, dict], Awai
             raise SafetyRefusal(str(e)) from None
         named = _Named()
         _by_role(tool, arguments, roles, named)
+        if tool in no_target:
+            _no_target_declarations(tool, arguments, roles)
         if tool in id_only:
             _id_only_declarations(tool, arguments, roles)
         for owner in [*named.owner_args, *(o for o, _ in named.top_pairs), *named.owners]:

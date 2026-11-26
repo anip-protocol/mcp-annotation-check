@@ -30,6 +30,10 @@ ROLES = {
         "issue_number": "id", "gist_id": "id", "widget_id": "id", "repo_id": "id",
         "pull_number": "other", "body": "content",
     },
+    "search_code": {
+        "query": "other", "payload": "content", "owner": "owner", "repo": "repository",
+        "full_name": "full_name", "repository_id": "repository_id", "issue_number": "id",
+    },
 }
 
 
@@ -42,6 +46,7 @@ def pack(**overrides) -> Pack:
         standard_read_only_fields=[],
         entries={t: ToolEntry(tool=t, argument_roles=r) for t, r in ROLES.items()},
         id_only_write_tools=["update_by_id"],
+        no_target_tools=["search_code"],
     )
     values.update(overrides)
     return Pack(**values)
@@ -553,3 +558,36 @@ async def test_preflight_refuses_non_ascii_login_that_casefolds_to_the_expected_
     gh = GitHub({"/user": {"login": "teſt-account"}})
     with pytest.raises(SafetyRefusal, match="preflight 2"):
         await preflight(gh.rest, TOKEN, pack(), LOGIN)
+
+
+# --- no-target tools: only content and other arguments, by declaration -------------
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"query": "x", "owner": ORG},
+        {"query": "x", "owner": ORG, "repo": "write-repo"},
+        {"query": "x", "full_name": WRITE},
+        {"query": "x", "repository_id": 5},
+        {"query": "x", "issue_number": 7},
+    ],
+)
+async def test_no_target_tool_with_a_non_content_argument_refused(arguments):
+    # Even an allowlisted owner or a pack repository is refused: the pack said none.
+    gh = GitHub({"/repositories/5": {"full_name": WRITE, "owner": {"login": ORG}}})
+    with pytest.raises(SafetyRefusal, match="no_target_tools"):
+        await check(arguments, "search_code", gh=gh)
+    assert gh.requests == []
+
+
+async def test_no_target_tool_with_content_and_other_arguments_allowed():
+    gh = await check({"query": "is:open label:bug", "payload": {"text": "hi"}}, "search_code")
+    assert gh.requests == []
+    gh = await check({}, "search_code")
+    assert gh.requests == []
+
+
+async def test_no_target_tool_content_is_still_walked():
+    with pytest.raises(SafetyRefusal, match="outside-org"):
+        await check({"payload": {"owner": "outside-org"}}, "search_code")

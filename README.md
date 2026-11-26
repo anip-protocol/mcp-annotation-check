@@ -23,7 +23,7 @@ The harness calls tools that can write. The token is the boundary: a fine-graine
 - The token is read from the environment variable `MCP_ANNOTATION_CHECK_GITHUB_TOKEN`. The harness never logs, prints or writes it to a report; error text passes through a redactor before it reaches a report or the console, so that protection is only as strong as the redactor.
 - Preflight, before any tool runs, using GET requests only: the token must be fine-grained; `GET /user` must be the expected test account (`--login`); every repository the token lists must belong to the pack's allowlist and every pack repository must be listed; and the account must belong to no organization outside the allowlist and own no repository outside it. The last check may pass vacuously if GitHub filters those endpoints by token; see [docs/verification.md](docs/verification.md).
 - Before the first call, the pack is validated against the server's `tools/list` (see [Pack format](#pack-format)). Any problem stops the run before a fixture is created or a tool is called.
-- Per-call checks, before every tool call: the rendered arguments are re-checked against the pack's content rule; every argument must have a role declared in the pack, and one without is refused; each value is checked by its role (owners must be allowlisted, repositories must be the pack's own, repository IDs are resolved to their owner through REST). Inside free-form `content` values, keys that look like owners or repositories are still checked, as defence in depth. Tools that take only IDs have the IDs resolved to an owner first.
+- Per-call checks, before every tool call: the rendered arguments are re-checked against the pack's content rule; every argument must have a role declared in the pack, and one without is refused; each value is checked by its role (owners must be allowlisted, repositories must be the pack's own, repository IDs are resolved to their owner through REST). Inside free-form `content` values, keys that look like owners or repositories are still checked, as defence in depth. Tools that take only IDs have the IDs resolved to an owner first. Tools on `no_target_tools` are refused if any argument has a role other than `content` or `other`.
 - A safety refusal stops the whole run. Arguments are never rewritten.
 - Checks run one at a time. The harness never posts, comments or publishes anywhere.
 
@@ -122,7 +122,16 @@ tools:
 
 If a tool's repository argument takes `owner/name`, declare it `full_name`. Skipped entries need no roles.
 
-Before the first call, the harness checks the pack against the server's `tools/list`: every enabled tool exists, every input-schema property has a role, every role names a real property, and owner and repository values are the placeholders above. Problems are listed under "Pack validation" in the report header (`pack_problems` in `report.json`) and on stderr; every enabled tool is then SKIPPED with "pack validation failed: <n> problem(s)". Warnings do not stop the run: a property whose name looks like an owner or repository (such as `target_owner` or `org`) but is declared `content`, `other` or `id` is listed as a warning (`pack_warnings`) for a human to check.
+An enabled entry must name a repository through an `owner`, `repository`, `full_name` or `repository_id` argument, unless the pack puts it on one of two lists:
+
+- `id_only_write_tools`: tools that take only IDs (an issue ID, a gist ID). Each needs at least one `id` or `repository_id` argument, which is resolved to its owner through REST before every call.
+- `no_target_tools`: tools that name no repository by design, such as `get_me` or a search that takes only a query. Every argument must be `content` or `other`. A tool is on this list because the pack says so, never because of its annotations; the report header lists these tools.
+
+```yaml
+no_target_tools: [get_me, search_issues]
+```
+
+Before the first call, the harness checks the pack against the server's `tools/list`: every enabled tool exists, every input-schema property has a role, every role names a real property, owner and repository values are the placeholders above, and the rules for the two lists hold (an ID-only tool has an ID argument; a no-target tool has only `content` and `other` arguments, is not also ID-only, and has an enabled entry). Problems are listed under "Pack validation" in the report header (`pack_problems` in `report.json`) and on stderr; every enabled tool is then SKIPPED with "pack validation failed: <n> problem(s)". Warnings do not stop the run: a property whose name looks like an owner or repository (such as `target_owner` or `org`) but is declared `content`, `other` or `id` is listed as a warning (`pack_warnings`) for a human to check.
 
 ## How to read a report
 

@@ -132,6 +132,12 @@ def test_loads_id_only_write_tools_and_read_fixtures(tmp_path):
     pack = load_pack(p)
     assert pack.id_only_write_tools == ["create_thing"]
     assert pack.read_fixtures == {"issue_number": 3}
+    assert pack.no_target_tools == []
+
+
+def test_loads_no_target_tools(tmp_path):
+    p = write_pack(tmp_path, "  t1:\n    status: enabled\n", extra="no_target_tools: [get_me]\n")
+    assert load_pack(p).no_target_tools == ["get_me"]
 
 
 def test_render_arguments_substitutes_fixture_values(tmp_path):
@@ -426,7 +432,8 @@ def test_entry_without_roles_is_a_problem():
     pack = load_pack(Path(__file__).parent.parent / "packs" / "fake.yaml")
     pack = replace(pack, entries={"t1": ToolEntry(tool="t1")}, id_only_write_tools=["t1"])
     assert validate_pack(pack, [tool("t1", "issue_id")]) == [
-        "t1: input-schema property 'issue_id' has no declared role"
+        "t1: input-schema property 'issue_id' has no declared role",
+        "t1: on id_only_write_tools, but no argument has the id or repository_id role",
     ]
 
 
@@ -446,9 +453,9 @@ def test_id_only_tool_with_an_id_declared_otherwise_is_a_problem(tmp_path):
 @pytest.mark.parametrize("role", ["content", "other", "id"])
 @pytest.mark.parametrize("prop", ["target_owner", "newowner", "org", "repoName", "ownér", "nwo"])
 def test_owner_like_property_declared_harmless_is_a_warning(tmp_path, role, prop):
-    body = f'  t1:\n    argument_roles: {{"{prop}": {role}}}\n'
+    body = f'  t1:\n    argument_roles: {{"{prop}": {role}, gist_id: id}}\n'
     pack = load_pack(write_pack(tmp_path, body, extra="id_only_write_tools: [t1]\n"))
-    tools = [tool("t1", prop)]
+    tools = [tool("t1", prop, "gist_id")]
     assert validate_pack(pack, tools) == []  # a warning is not a problem
     assert pack_warnings(pack) == [
         f"warning: t1: property {prop!r} may name an owner or repository but is declared "
@@ -468,7 +475,7 @@ def test_enabled_entry_naming_no_repository_must_be_id_only(tmp_path):
     flagged = validate_pack(load_pack(write_pack(tmp_path, body)), tools)
     assert flagged == [
         "t1: no argument names a repository (owner, repository, full_name or repository_id "
-        "role), so the tool must be on id_only_write_tools"
+        "role), so the tool must be on id_only_write_tools or no_target_tools"
     ]
     listed = write_pack(tmp_path, body, extra="id_only_write_tools: [t1]\n")
     assert validate_pack(load_pack(listed), tools) == []
@@ -479,3 +486,77 @@ def test_a_repository_role_satisfies_the_rule(tmp_path, role):
     pack = load_pack(write_pack(tmp_path, f"  t1:\n    argument_roles: {{x: {role}}}\n"))
     problems = validate_pack(pack, [tool("t1", "x")])
     assert not any("names a repository" in p or "no argument names" in p for p in problems)
+
+
+# --- no_target_tools: tools with no repository by declaration ----------------------
+
+
+NO_TARGET = "  t1:\n    argument_roles: {query: other, body: content}\n"
+
+
+def test_no_target_tool_with_content_and_other_roles_is_valid(tmp_path):
+    pack = load_pack(write_pack(tmp_path, NO_TARGET, extra="no_target_tools: [t1]\n"))
+    assert validate_pack(pack, [tool("t1", "query", "body")]) == []
+    # an entry with no arguments at all (get_me) is valid too
+    pack = load_pack(
+        write_pack(tmp_path, "  t1:\n    status: enabled\n", extra="no_target_tools: [t1]\n")
+    )
+    assert validate_pack(pack, [tool("t1")]) == []
+
+
+@pytest.mark.parametrize("role", ["owner", "repository", "full_name", "repository_id", "id"])
+def test_no_target_tool_with_repository_role_is_a_problem(tmp_path, role):
+    body = f"  t1:\n    argument_roles: {{query: other, x: {role}}}\n"
+    pack = load_pack(write_pack(tmp_path, body, extra="no_target_tools: [t1]\n"))
+    problems = validate_pack(pack, [tool("t1", "query", "x")])
+    assert (
+        f"t1: on no_target_tools, so argument 'x' must be content or other, not {role!r}"
+        in problems
+    )
+
+
+def test_tool_on_both_no_target_and_id_only_is_a_problem(tmp_path):
+    extra = "no_target_tools: [t1]\nid_only_write_tools: [t1]\n"
+    pack = load_pack(write_pack(tmp_path, NO_TARGET, extra=extra))
+    problems = validate_pack(pack, [tool("t1", "query", "body")])
+    assert "t1: on both no_target_tools and id_only_write_tools" in problems
+
+
+def test_id_only_tool_without_id_fails_validation(tmp_path):
+    body = "  t1:\n    argument_roles: {owner: owner, repo: repository, body: content}\n"
+    pack = load_pack(write_pack(tmp_path, body, extra="id_only_write_tools: [t1]\n"))
+    assert validate_pack(pack, [tool("t1", "owner", "repo", "body")]) == [
+        "t1: on id_only_write_tools, but no argument has the id or repository_id role"
+    ]
+    for role in ("id", "repository_id"):
+        body = f"  t1:\n    argument_roles: {{owner: owner, repo: repository, gist_id: {role}}}\n"
+        pack = load_pack(write_pack(tmp_path, body, extra="id_only_write_tools: [t1]\n"))
+        assert validate_pack(pack, [tool("t1", "owner", "repo", "gist_id")]) == []
+
+
+def test_no_target_name_without_an_enabled_entry_is_a_problem(tmp_path):
+    tools = "  t1:\n    status: skipped\n    skip_reason: later\n  t2:\n    status: enabled\n"
+    pack = load_pack(write_pack(tmp_path, tools, extra="no_target_tools: [t1, t2, t3]\n"))
+    assert validate_pack(pack, [tool("t1"), tool("t2")]) == [
+        "t1: on no_target_tools, but has no enabled pack entry",
+        "t3: on no_target_tools, but has no enabled pack entry",
+    ]
+
+
+def test_no_target_does_not_depend_on_annotations(tmp_path):
+    # The declaration is the pack's alone: a tool claiming readOnlyHint is not exempt.
+    from mcp.types import ToolAnnotations
+
+    body = "  t1:\n    argument_roles: {query: other}\n"
+    listed = Tool(
+        name="t1",
+        input_schema={"type": "object", "properties": {"query": {"type": "string"}}},
+        annotations=ToolAnnotations(read_only_hint=True),
+    )
+    assert validate_pack(load_pack(write_pack(tmp_path, body)), [listed]) == [
+        (
+            "t1: no argument names a repository (owner, repository, full_name or "
+            "repository_id role), so the tool must be on id_only_write_tools or "
+            "no_target_tools"
+        )
+    ]

@@ -77,6 +77,8 @@ class RunHeader:
     tools_list: list[dict]
     tools_list_sha256: str
     standard_read_only_fields: list[str]
+    # The pack's no_target_tools: tools that name no repository by its declaration.
+    no_target_tools: list[str] = field(default_factory=list)
     # From pack.validate_pack and pack.pack_warnings, run against tools/list before
     # the first call. Any problem means no tool was called and no fixture created.
     pack_problems: list[str] = field(default_factory=list)
@@ -225,6 +227,7 @@ def _header_table(h: RunHeader) -> list[str]:
         ("Pack version", h.pack_version),
         ("tools/list", f"{len(h.tools_list)} tools, sha256 `{h.tools_list_sha256}`"),
         ("Read-only comparison set", ", ".join(h.standard_read_only_fields) or "none"),
+        ("No-target tools", ", ".join(h.no_target_tools) or "none"),
     ]
     return ["| Field | Value |", "|---|---|"] + [
         f"| {name} | {_cell(value)} |" for name, value in rows

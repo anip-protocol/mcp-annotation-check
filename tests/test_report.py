@@ -226,3 +226,41 @@ async def test_unjudged_tools_are_listed_with_reasons_in_the_coverage_section(tm
     coverage_section = md.split("## Coverage", 1)[1].split("## Tools", 1)[0]
     assert "Unjudged:" in coverage_section
     assert f"- `comment_tool`: {detail}" in coverage_section
+
+
+async def test_header_lists_no_target_tools(tmp_path):
+    from mcp_annotation_check.fake.server import FakeStore, build_fake_server
+
+    store = FakeStore()
+    server = build_fake_server(store)
+
+    # No annotations, so the tool is not called: the fake reader only knows issues.
+    @server.tool(name="who_am_i")
+    def who_am_i(query: str = "") -> str:
+        return "me"
+
+    pack = load_pack(FAKE_PACK)
+    entry = replace(
+        pack.entries["get_issue"],
+        tool="who_am_i",
+        fixture=None,
+        arguments={"query": "me"},
+        argument_roles={"query": "other"},
+    )
+    pack = replace(
+        pack, entries={**pack.entries, "who_am_i": entry}, no_target_tools=["who_am_i"]
+    )
+    header, results = await run_fake(pack=pack, store=store, server=server)
+    assert header.pack_problems == []
+    assert header.no_target_tools == ["who_am_i"]
+    write_reports(header, results, tmp_path)
+    data = json.loads((tmp_path / "report.json").read_text())
+    assert data["header"]["no_target_tools"] == ["who_am_i"]
+    md = (tmp_path / "report.md").read_text()
+    assert "| No-target tools | who_am_i |" in md
+
+
+async def test_header_says_none_without_no_target_tools(tmp_path):
+    md, data, _ = await written(tmp_path)
+    assert data["header"]["no_target_tools"] == []
+    assert "| No-target tools | none |" in md

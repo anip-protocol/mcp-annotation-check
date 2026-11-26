@@ -7,7 +7,14 @@ Top-level keys:
                        compared case-insensitively by the safety checks
   repositories         map name -> "owner/name", ASCII (names used: "read", "write")
   standard_read_only_fields   list of {path, kind} compared for read-only tools
-  id_only_write_tools  list of tool names (default empty)
+  id_only_write_tools  list of tool names (default empty): tools whose arguments
+                       name no repository, only IDs that are resolved to an owner
+                       through REST before each call; each needs an `id` or
+                       `repository_id` argument
+  no_target_tools      list of tool names (default empty): tools that name no
+                       repository by design (`get_me`, a query-only search); every
+                       argument must be `content` or `other`. A tool is on this list
+                       because the pack says so, never because of its annotations
   read_fixtures        map of fixture values for read-repository entries
                        that name no fixture (default empty)
   tools                map tool name -> entry:
@@ -36,7 +43,8 @@ argument in the tool's input schema; skipped entries need none:
 At load time every argument of an enabled entry must have a role, and owner and
 repository values must be those placeholders, so they render to the pack's own
 repositories by construction. `validate_pack` then checks the pack against the
-server's tools/list before the first call; `pack_warnings` lists properties whose
+server's tools/list before the first call (including the rules for
+`id_only_write_tools` and `no_target_tools`); `pack_warnings` lists properties whose
 names look like owners or repositories but are declared content, other or id.
 """
 
@@ -53,6 +61,10 @@ from mcp_annotation_check.snapshot import FieldKind, FieldSpec
 
 REPOSITORY_ROLES = frozenset({"owner", "repository", "full_name", "repository_id"})
 ROLES = frozenset({"owner", "repository", "full_name", "repository_id", "id", "content", "other"})
+# The roles an ID-only write tool needs at least one of.
+ID_ROLES = frozenset({"id", "repository_id"})
+# The only roles a no-target tool may have.
+NO_TARGET_ROLES = frozenset({"content", "other"})
 # The only value each of these roles may have in a pack.
 _PLACEHOLDER_ROLES = {
     "owner": "{repo.owner}",
@@ -97,6 +109,7 @@ class Pack:
     standard_read_only_fields: list[FieldSpec]
     entries: dict[str, ToolEntry]
     id_only_write_tools: list[str] = field(default_factory=list)
+    no_target_tools: list[str] = field(default_factory=list)
     read_fixtures: dict[str, Any] = field(default_factory=dict)
 
 
@@ -234,12 +247,16 @@ def validate_pack(pack: Pack, tools: list[Tool]) -> list[str]:
     Checked for every enabled entry (skipped entries are not validated): its role
     rules (as at load time, so entries built in code are covered too), that the tool
     is listed, that every input-schema property has a declared role and every role
-    names a property, that it names a repository unless it is on `id_only_write_tools`, and, for ID-only write tools, that nothing that looks like an
-    ID is declared anything but `id` or `repository_id`. Warnings are separate: see
+    names a property, and that it names a repository unless it is on
+    `id_only_write_tools` or `no_target_tools`. An ID-only write tool must have an
+    `id` or `repository_id` role, and nothing that looks like an ID may be declared
+    anything else. A no-target tool may have only `content` and `other` roles, may
+    not also be ID-only, and must have an enabled entry. Warnings are separate: see
     `pack_warnings`.
     """
     listed = {t.name: t for t in tools}
     id_only = set(pack.id_only_write_tools)
+    no_target = set(pack.no_target_tools)
     problems: list[str] = []
     for name, entry in pack.entries.items():
         if entry.status != "enabled":
@@ -263,18 +280,42 @@ def validate_pack(pack: Pack, tools: list[Tool]) -> list[str]:
             for r in roles
             if r not in properties
         ]
-        if name not in id_only and not any(r in REPOSITORY_ROLES for r in roles.values()):
+        if (
+            name not in id_only
+            and name not in no_target
+            and not any(r in REPOSITORY_ROLES for r in roles.values())
+        ):
             problems.append(
                 f"{name}: no argument names a repository (owner, repository, full_name or "
-                "repository_id role), so the tool must be on id_only_write_tools"
+                "repository_id role), so the tool must be on id_only_write_tools or "
+                "no_target_tools"
             )
         if name in id_only:
             problems += [
                 f"{name}: {p!r} looks like an ID of an ID-only write tool but is declared "
                 f"{roles[p]!r}"
                 for p in properties
-                if p in roles and roles[p] not in ("id", "repository_id") and looks_like_id(p)
+                if p in roles and roles[p] not in ID_ROLES and looks_like_id(p)
             ]
+            if not any(r in ID_ROLES for r in roles.values()):
+                problems.append(
+                    f"{name}: on id_only_write_tools, but no argument has the id or "
+                    "repository_id role"
+                )
+        if name in no_target:
+            if name in id_only:
+                problems.append(f"{name}: on both no_target_tools and id_only_write_tools")
+            problems += [
+                f"{name}: on no_target_tools, so argument {arg!r} must be content or other, "
+                f"not {role!r}"
+                for arg, role in roles.items()
+                if role not in NO_TARGET_ROLES
+            ]
+    problems += [
+        f"{name}: on no_target_tools, but has no enabled pack entry"
+        for name in pack.no_target_tools
+        if name not in pack.entries or pack.entries[name].status != "enabled"
+    ]
     return problems
 
 
@@ -345,6 +386,7 @@ def load_pack(path: Path) -> Pack:
         standard_read_only_fields=_fields(raw.get("standard_read_only_fields"), "pack"),
         entries={name: _entry(name, body) for name, body in tools.items()},
         id_only_write_tools=list(raw.get("id_only_write_tools") or []),
+        no_target_tools=list(raw.get("no_target_tools") or []),
         read_fixtures=read_fixtures,
     )
 

@@ -195,6 +195,7 @@ def _header(
         tools_list=tools_list,
         tools_list_sha256=tools_list_digest(tools_list),
         standard_read_only_fields=[f.path for f in pack.standard_read_only_fields],
+        no_target_tools=list(pack.no_target_tools),
         pack_problems=problems,
         pack_warnings=warnings,
     )
