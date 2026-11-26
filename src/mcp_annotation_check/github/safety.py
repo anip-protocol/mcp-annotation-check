@@ -3,6 +3,8 @@
 The token is the real boundary (see the spec's Safety section). These checks make
 sure the harness is pointed at that boundary and refuse loudly when it is not. Any
 failure raises `SafetyRefusal`; nothing here ever modifies a request or argument.
+The harness's own REST writes (fixtures and cleanup) are limited separately, by the
+write guard in rest.py.
 
 Preflight (`preflight`), in order, using only GET requests:
   1. The token must be fine-grained: `ghp_`, `gho_`, `ghu_` and `ghs_` tokens are
@@ -41,8 +43,11 @@ those declarations against tools/list before the first call. Per call:
       * `full_name`: "owner/name" with ASCII parts, naming one of the pack's
         repositories (so its owner is allowlisted too);
       * `repository_id`: a plain ID, resolved through `GET /repositories/{id}` for
-        every tool; the owner found must be allowlisted;
-      * `id`: a plain number or token of letters, digits, `_` and `-`;
+        every tool; the owner found must be allowlisted (at pack load the value must
+        be one whole `{fixture.<key>}` placeholder, as for `id`);
+      * `id`: a plain number or token of letters, digits, `_` and `-` (at pack load
+        the value must be one whole `{fixture.<key>}` placeholder, so it names an
+        object the harness created or a read fixture; see pack.py);
       * `content`: anything the content rule accepts. Inside a mapping or list, the
         key walk below still applies, as defence in depth;
       * `other`: a scalar (string, number, boolean or null); a mapping or list is
@@ -58,9 +63,13 @@ those declarations against tools/list before the first call. Per call:
         level; full-name keys (`full_name`, `repository_full_name`, `name_with_owner`)
         must be "owner/name";
       * `repo_id`/`repository_id` are resolved through `GET /repositories/{id}`.
-    Every owner named must be allowlisted. Refused as uninterpretable: any key with a
-    non-ASCII character; any other key whose joined lower-case form contains `owner`,
-    `organi`, `org`, `repo`, `user`, `nwo`, `login`, `namespace` or `account`
+    Every owner named must be allowlisted, and every repository named (an
+    "owner/name" value, or a bare name with its owner) must be one of the pack's
+    repositories, exactly as for top-level arguments; an owner on its own only needs
+    the allowlist. A pair found here never says which repository a repository-scoped
+    ID belongs to: only top-level arguments do. Refused as uninterpretable: any key
+    with a non-ASCII character; any other key whose joined lower-case form contains
+    `owner`, `organi`, `org`, `repo`, `user`, `nwo`, `login`, `namespace` or `account`
     (`orgs`, `user_id`, `owner_type`, `newowner`, `targetrepo`, …), except the
     known-harmless `report`, `reports` and `reporter`; a non-string value; a bare
     name with no owner or several owners; and a malformed name.
@@ -271,14 +280,17 @@ def _plain_id(key: str, raw: Any, tool: str) -> str:
 
 class _Named:
     """What the arguments name: owners, (owner, name) pairs from top-level roles,
-    top-level `repository` names still to pair with the `owner` role, and repository
-    IDs (top-level or inside content) still to be resolved through REST."""
+    top-level `repository` names still to pair with the `owner` role, (owner, name)
+    pairs found inside content, and repository IDs (top-level or inside content)
+    still to be resolved through REST. Only top-level pairs say which repository a
+    repository-scoped ID belongs to."""
 
     def __init__(self) -> None:
         self.owners: list[str] = []
         self.owner_args: list[str] = []
         self.bare_repos: list[tuple[str, str]] = []
         self.top_pairs: list[tuple[str, str]] = []
+        self.nested_pairs: list[tuple[str, str]] = []
         self.repo_ids: list[tuple[str, str]] = []
 
 
@@ -328,6 +340,7 @@ def _level(d: dict, tool: str, named: _Named) -> None:
         else:
             pair = _split(f"{next(iter(distinct.values()))}/{value}", key, tool)
         named.owners.append(pair[0])
+        named.nested_pairs.append(pair)
 
 
 def _walk(value: Any, tool: str, named: _Named) -> None:
@@ -519,7 +532,7 @@ def make_before_call(rest: GitHubRest, pack: Pack) -> Callable[[str, dict], Awai
             if not _on_allowlist(owner, allowed):
                 raise SafetyRefusal(f"{tool}: owner {owner!r} is not on the allowlist")
         _pair(tool, named)
-        for owner, name in named.top_pairs:
+        for owner, name in [*named.top_pairs, *named.nested_pairs]:
             if f"{owner}/{name}".lower() not in repositories:
                 raise SafetyRefusal(
                     f"{tool}: {owner}/{name} is not one of the pack's repositories"

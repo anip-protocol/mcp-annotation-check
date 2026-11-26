@@ -450,6 +450,51 @@ async def test_harmless_content_allowed(payload):
     assert gh.requests == []
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"owner": ORG, "repo": "other-repo"},
+        {"Owner": ORG, "repoName": "other-repo"},
+        {"org": ORG, "repository_name": "other-repo"},
+        {"repo": f"{ORG}/other-repo"},
+        {"repoName": f"{ORG}/other-repo"},
+        {"full_name": f"{ORG}/other-repo"},
+        {"nameWithOwner": f"{ORG}/other-repo"},
+        {"a": [{"b": {"owner": ORG, "repo": "other-repo"}}]},
+        [{"repository": f"{ORG}/other-repo"}],
+    ],
+)
+async def test_nested_pair_outside_pack_repositories_refused(payload):
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal, match=f"{ORG}/other-repo is not one of the pack's"):
+        await check({"owner": ORG, "repo": "write-repo", "payload": payload}, "with_payload", gh=gh)
+    assert gh.requests == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"owner": ORG, "repo": "write-repo"},
+        {"Owner": "Test-Org", "repoName": "Read-Repo"},
+        {"full_name": READ},
+        {"a": [{"repository": WRITE}]},
+        {"owner": ORG},  # an owner alone still only needs the allowlist
+    ],
+)
+async def test_nested_pair_inside_pack_repositories_allowed(payload):
+    gh = await check({"owner": ORG, "repo": "write-repo", "payload": payload}, "with_payload")
+    assert gh.requests == []
+
+
+async def test_nested_pair_does_not_count_as_the_call_repository_for_scoped_ids():
+    # The nested pair is checked, but only top-level arguments say which repository
+    # a repository-scoped ID belongs to: none here, so the ID cannot be resolved.
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal, match="name 0 repositories"):
+        await check({"issue_number": 3, "body": {"repository": WRITE}}, "update_by_id", gh=gh)
+    assert gh.requests == []
+
+
 async def test_repository_id_inside_content_resolved():
     gh = GitHub({"/repositories/5": repo("outside-org/thing")})
     with pytest.raises(SafetyRefusal, match="outside-org"):

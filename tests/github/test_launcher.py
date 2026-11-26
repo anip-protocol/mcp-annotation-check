@@ -172,8 +172,9 @@ def test_run_success_path_passes_secrets_closes_rest_and_keeps_token_off_args(
     seen: dict = {}
 
     class FakeRest:
-        def __init__(self, token):
+        def __init__(self, token, transport=None, write_repositories=None):
             seen["rest_token"] = token
+            seen["write_repositories"] = write_repositories
             seen["closed"] = False
 
         async def aclose(self):
@@ -205,6 +206,8 @@ def test_run_success_path_passes_secrets_closes_rest_and_keeps_token_off_args(
 
     assert cli.main(_run_args(tmp_path)) == 0
     assert seen["rest_token"] == TOKEN
+    # The harness's own REST writes are limited to the pack's repositories.
+    assert sorted(seen["write_repositories"]) == ["owner/read-repo", "owner/write-repo"]
     assert seen["closed"] is True
     assert seen["run_kwargs"]["secrets"] == [TOKEN]
     assert seen["context"]["image_digest"] == "img@sha256:abc"

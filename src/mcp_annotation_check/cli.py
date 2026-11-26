@@ -11,6 +11,7 @@ from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 
+import httpx
 from mcp import Client
 
 from mcp_annotation_check.fake.reader import FakeReader
@@ -124,11 +125,26 @@ def _fail(error: BaseException, token: str | None) -> int:
     return 1
 
 
+def rest_for_run(
+    token: str, pack: Pack, transport: httpx.AsyncBaseTransport | None = None
+) -> GitHubRest:
+    """The REST client for `run`: its own writes (fixtures, cleanup) may only reach
+    the pack's repositories."""
+    return GitHubRest(token, transport=transport, write_repositories=pack.repositories.values())
+
+
+def rest_for_shakedown(
+    token: str, transport: httpx.AsyncBaseTransport | None = None
+) -> GitHubRest:
+    """The REST client for `shakedown`, which only reads: every write is refused."""
+    return GitHubRest(token, transport=transport, write_repositories=())
+
+
 async def _run_github(
     args: argparse.Namespace, token: str
 ) -> tuple[RunHeader, list[ToolResult]]:
     pack = load_pack(args.pack)
-    rest = GitHubRest(token)
+    rest = rest_for_run(token, pack)
     try:
         facts = await preflight(rest, token, pack, args.login)
         # The RunHeader has no field for these, so they are printed instead.
@@ -263,7 +279,7 @@ async def _shakedown_server(open_client, reader, pack, report, passed, failed) -
 
 async def _shakedown_github(args: argparse.Namespace, token: str) -> bool:
     pack = load_pack(args.pack)
-    rest = GitHubRest(token)
+    rest = rest_for_shakedown(token)
     toolsets, features = _split(args.toolsets), _split(args.features)
     try:
         context = {

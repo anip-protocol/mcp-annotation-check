@@ -234,7 +234,9 @@ async def test_validation_problem_stops_before_any_fixture(tmp_path):
 
     pack = load_pack(FAKE_PACK)
     labels = pack.entries["set_labels"]
-    no_role = replace(labels, argument_roles={"issue_id": "id"}, arguments={"issue_id": "x"})
+    no_role = replace(
+        labels, argument_roles={"issue_id": "id"}, arguments={"issue_id": "{fixture.issue_id}"}
+    )
     title = pack.entries["rename_issue"]
     extra_role = replace(title, argument_roles={**title.argument_roles, "owner": "owner"})
     pack = with_entries(pack, set_labels=no_role, rename_issue=extra_role)

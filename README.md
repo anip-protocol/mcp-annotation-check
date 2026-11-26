@@ -23,7 +23,8 @@ The harness calls tools that can write. The token is the boundary: a fine-graine
 - The token is read from the environment variable `MCP_ANNOTATION_CHECK_GITHUB_TOKEN`. The harness never logs, prints or writes it to a report; error text passes through a redactor before it reaches a report or the console, so that protection is only as strong as the redactor.
 - Preflight, before any tool runs, using GET requests only: the token must be fine-grained; `GET /user` must be the expected test account (`--login`); every repository the token lists must belong to the pack's allowlist and every pack repository must be listed; and the account must belong to no organization outside the allowlist and own no repository outside it. The last check may pass vacuously if GitHub filters those endpoints by token; see [docs/verification.md](docs/verification.md).
 - Before the first call, the pack is validated against the server's `tools/list` (see [Pack format](#pack-format)). Any problem stops the run before a fixture is created or a tool is called.
-- Per-call checks, before every tool call: the rendered arguments are re-checked against the pack's content rule; every argument must have a role declared in the pack, and one without is refused; each value is checked by its role (owners must be allowlisted, repositories must be the pack's own, repository IDs are resolved to their owner through REST). Inside free-form `content` values, keys that look like owners or repositories are still checked, as defence in depth. Tools that take only IDs have the IDs resolved to an owner first. Tools on `no_target_tools` are refused if any argument has a role other than `content` or `other`, or a name like an owner, repository or ID.
+- Per-call checks, before every tool call: the rendered arguments are re-checked against the pack's content rule; every argument must have a role declared in the pack, and one without is refused; each value is checked by its role (owners must be allowlisted, repositories must be the pack's own, repository IDs are resolved to their owner through REST). Inside free-form `content` values, keys that look like owners or repositories are still checked, as defence in depth: an owner must be allowlisted, and an owner/repository pair must be one of the pack's repositories, as at the top level. Tools that take only IDs have the IDs resolved to an owner first. Tools on `no_target_tools` are refused if any argument has a role other than `content` or `other`, or a name like an owner, repository or ID.
+- The harness's own REST writes (creating and cleaning up fixtures) can only reach paths inside the pack's repositories (`/repos/<owner>/<name>/...`); any other non-GET request is refused before it is sent. The `shakedown` client refuses every write.
 - A safety refusal stops the whole run. Arguments are never rewritten.
 - Checks run one at a time. The harness never posts, comments or publishes anywhere.
 
@@ -103,8 +104,8 @@ A pack is a YAML file describing one server's tools; the full key list is in the
 | `owner` | an owner login | exactly `{repo.owner}` |
 | `repository` | a bare repository name, paired with the call's one `owner` argument | exactly `{repo.name}` |
 | `full_name` | `owner/name` | exactly `{repo.owner}/{repo.name}` |
-| `repository_id` | a numeric repository ID, resolved to its owner through REST | any plain ID |
-| `id` | any other ID (issue number, comment ID, ...) | any plain ID |
+| `repository_id` | a numeric repository ID, resolved to its owner through REST | exactly one `{fixture.<key>}` placeholder |
+| `id` | any other ID (issue number, comment ID, ...) | exactly one `{fixture.<key>}` placeholder |
 | `content` | free text or structured data; the only role that may hold a mapping or list | anything the content rule allows |
 | `other` | any other scalar (state, sort order, a search query, ...) | a scalar |
 
@@ -120,7 +121,7 @@ tools:
     argument_roles: {owner: owner, repo: repository, issue_number: id, labels: content}
 ```
 
-If a tool's repository argument takes `owner/name`, declare it `full_name`. Skipped entries need no roles.
+If a tool's repository argument takes `owner/name`, declare it `full_name`. An ID value must be the whole placeholder (`"{fixture.issue_number}"`, not `"7"` or `"x{fixture.n}"`), so every ID names an object the harness created; a read-repository entry with no fixture takes the values from the pack's `read_fixtures`. A pack that breaks any of these rules does not load. Skipped entries need no roles.
 
 An enabled entry must name a repository through an `owner`, `repository`, `full_name` or `repository_id` argument, unless the pack puts it on one of two lists:
 

@@ -35,17 +35,23 @@ argument in the tool's input schema; skipped entries need none:
   repository     a bare repository name; exactly "{repo.name}", and the call must
                  have exactly one owner argument to pair it with
   full_name      "owner/name"; exactly "{repo.owner}/{repo.name}"
-  repository_id  a numeric repository ID, resolved to its owner through REST
-  id             any other ID (issue number, comment ID, ...)
+  repository_id  a numeric repository ID, resolved to its owner through REST;
+                 exactly one "{fixture.<key>}" placeholder
+  id             any other ID (issue number, comment ID, ...); exactly one
+                 "{fixture.<key>}" placeholder (the whole string, key in ASCII
+                 letters, digits and _), filled from the entry's fixture or, for a
+                 read entry with no fixture, from read_fixtures
   content        free text or structured data; the only role whose value may be
                  a mapping or a list
   other          any other scalar (state, sort order, a search query, ...)
-At load time every argument of an enabled entry must have a role, and owner and
+At load time every argument of an enabled entry must have a role, owner and
 repository values must be those placeholders, so they render to the pack's own
-repositories by construction. `validate_pack` then checks the pack against the
-server's tools/list before the first call (including the rules for
-`id_only_write_tools` and `no_target_tools`); `pack_warnings` lists properties whose
-names look like owners or repositories but are declared content, other or id.
+repositories by construction, and ID values must be fixture placeholders, so a pack
+cannot hard-code an ID that points at someone else's object. `validate_pack` then
+checks the pack against the server's tools/list before the first call (including the
+rules for `id_only_write_tools` and `no_target_tools`); `pack_warnings` lists
+properties whose names look like owners or repositories but are declared content,
+other or id.
 """
 
 import re
@@ -76,6 +82,9 @@ _NESTED = (dict, list, tuple, set, frozenset)
 _MENTION = re.compile(r"(?<![\w.])@[A-Za-z0-9-]+")
 _XREF = re.compile(r"[\w.-]+/[\w.-]+#\d+")
 _PLACEHOLDER = re.compile(r"\{(fixture\.[\w]+|repo\.owner|repo\.name)\}")
+# The only value an id or repository_id argument may have: one whole fixture
+# placeholder, so every ID names an object the harness created (or a read fixture).
+_FIXTURE_ID = re.compile(r"\{fixture\.[A-Za-z0-9_]+\}")
 _OWNER = re.compile(r"[A-Za-z0-9_.-]+")  # ASCII only, as the safety checks require
 _FULL_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
@@ -224,6 +233,11 @@ def _role_problems(entry: ToolEntry) -> list[str]:
         elif role != "content" and isinstance(value, _NESTED):
             problems.append(
                 f"{tool}: argument {name!r} has a nested value; only content arguments may"
+            )
+        elif role in ID_ROLES and not (isinstance(value, str) and _FIXTURE_ID.fullmatch(value)):
+            problems.append(
+                f"{tool}: {role} argument {name!r} must be exactly one {{fixture.<key>}} "
+                f"placeholder, not {value!r}"
             )
     if repositories and owners != 1:
         problems.append(

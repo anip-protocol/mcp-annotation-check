@@ -231,3 +231,32 @@ def test_shakedown_cli_requires_token(monkeypatch, tmp_path, capsys):
                  "--toolsets", "default", "--out", str(tmp_path)])
     assert code == 1
     assert "MCP_ANNOTATION_CHECK_GITHUB_TOKEN" in capsys.readouterr().err
+
+
+def test_shakedown_cli_client_may_write_nowhere(monkeypatch, tmp_path):
+    from mcp_annotation_check import cli
+
+    seen: dict = {}
+
+    class FakeRest:
+        def __init__(self, token, transport=None, write_repositories=None):
+            seen["write_repositories"] = write_repositories
+
+        async def aclose(self):
+            seen["closed"] = True
+
+    async def fake_shakedown(open_client, rest, reader, *a, **k):
+        seen["rest"] = rest
+        return True
+
+    monkeypatch.setenv("MCP_ANNOTATION_CHECK_GITHUB_TOKEN", TOKEN)
+    monkeypatch.setattr(cli, "GitHubRest", FakeRest)
+    monkeypatch.setattr(cli, "image_digest", lambda image: "i@sha256:abc")
+    monkeypatch.setattr(cli, "shakedown", fake_shakedown)
+    code = main(["shakedown", "--pack", str(FAKE_PACK), "--login", LOGIN, "--image", "i",
+                 "--toolsets", "default", "--out", str(tmp_path)])
+    assert code == 0
+    # An empty collection, not None: every write is refused.
+    assert seen["write_repositories"] is not None
+    assert list(seen["write_repositories"]) == []
+    assert seen["closed"] is True

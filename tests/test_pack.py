@@ -342,6 +342,66 @@ def test_repository_needs_exactly_one_owner_argument(tmp_path, arguments, roles)
         load_pack(p)
 
 
+@pytest.mark.parametrize("role", ["id", "repository_id"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        '"123"',
+        "123",
+        "abc",
+        "true",
+        "null",
+        '"{repo.name}"',
+        '"{repo.owner}"',
+        '"x{fixture.n}"',
+        '"{fixture.n}x"',
+        '"{fixture.a}{fixture.b}"',
+        '"{fixture.}"',
+        '"{fixture.n-m}"',
+        '"{fixture.ſ}"',
+        '"{ fixture.n }"',
+    ],
+)
+def test_literal_id_value_refused_at_load(tmp_path, role, value):
+    p = write_pack(
+        tmp_path,
+        f"  t1:\n    fixture: issue\n    arguments: {{x: {value}}}\n"
+        f"    argument_roles: {{x: {role}}}\n",
+    )
+    with pytest.raises(PackError, match=f"t1: {role} argument 'x' must be exactly one "):
+        load_pack(p)
+
+
+def test_literal_id_value_in_entry_built_in_code_is_a_validation_problem(tmp_path):
+    p = write_pack(tmp_path, "  t1:\n    arguments: {}\n    argument_roles: {x: id}\n")
+    pack = load_pack(p)
+    entry = replace(pack.entries["t1"], arguments={"x": 7})
+    pack = replace(pack, entries={"t1": entry}, id_only_write_tools=["t1"])
+    assert validate_pack(pack, [tool("t1", "x")]) == [
+        "t1: id argument 'x' must be exactly one {fixture.<key>} placeholder, not 7"
+    ]
+
+
+@pytest.mark.parametrize("role", ["id", "repository_id"])
+def test_fixture_placeholder_id_accepted(tmp_path, role):
+    p = write_pack(
+        tmp_path,
+        '  t1:\n    fixture: issue\n    arguments: {x: "{fixture.issue_number}"}\n'
+        f"    argument_roles: {{x: {role}}}\n"
+        "  t2:\n    argument_roles: {x: id}\n"  # a declared ID with no value is fine
+        '  t3:\n    repository: read\n    arguments: {x: "{fixture.issue_number}"}\n'
+        f"    argument_roles: {{x: {role}}}\n",
+        extra="read_fixtures: {issue_number: 3}\n",
+    )
+    pack = load_pack(p)
+    assert render_arguments(pack.entries["t1"], {"issue_number": 7}, pack.repositories) == {
+        "x": 7
+    }
+    # A read entry takes its fixture values from read_fixtures, as the runner does.
+    t3 = pack.entries["t3"]
+    assert render_arguments(t3, dict(pack.read_fixtures), pack.repositories) == {"x": 3}
+
+
 @pytest.mark.parametrize("role", ["other", "id", "repository_id"])
 def test_nested_value_only_for_content(tmp_path, role):
     p = write_pack(
