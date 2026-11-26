@@ -34,8 +34,7 @@ The maintainer does these:
 
 - Create the separate GitHub account and test organization, after checking GitHub's terms on secondary accounts.
 - Create two private repositories in it: one for read-only checks, one for write tools. Turn off GitHub Actions for the organization. In the write repository, create the label `mcp-annotation-check:done`.
-- Create a fine-grained token with the test organization as its resource owner, access to those two repositories only, and these repository permissions: Metadata read; Contents read and write; Issues read and write; Pull requests read and write. No account permissions, and no Actions, Administration or Workflows permissions. The plan may narrow this further once each tool's needs are known.
-- Create the new repository under `anip-protocol` once the name is agreed.
+- Create two fine-grained tokens with the test organization as their resource owner and access to those two repositories only: one read-only (Metadata, Contents, Issues and Pull requests read) for the shakedown, and one read-write (Metadata read; Contents, Issues and Pull requests read and write) for runs. No account permissions, and no Actions, Administration or Workflows permissions.
 
 ## Install
 
