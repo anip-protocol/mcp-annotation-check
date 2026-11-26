@@ -158,3 +158,19 @@ list, the date, and whether the flag syntax matched `--help`.
 ## Before writing `packs/github.yaml`
 
 Done: tools with no repository by design go on the pack's `no_target_tools` list (only `content`/`other` roles), and an ID-only tool with no `id` or `repository_id` role now fails pack validation before the first call.
+
+## Sweep round 1
+
+The owner created these by hand in `mcp-annotation-check-lab/read-fixtures`; the pack's
+`read_fixtures` names them, and every read-only entry reads them without changing them:
+
+- issue #1, `read fixture issue`, with the label `fixture-label` and one comment;
+- pull request #2, from the branch `fixture-branch`;
+- the release and tag `v0.0.1` on `main`;
+- the file `README.md` on `main`.
+
+The pack is checked offline against `tests/data/tools-v2.3.0.json` (the 62 tools of the
+shakedown above; how it was built is in the file's `_built` field) by
+`tests/test_github_pack.py`. The next live run uses
+`ghcr.io/github/github-mcp-server:v2.3.0` with `--toolsets default --features
+issues_granular`.
