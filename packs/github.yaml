@@ -6,7 +6,7 @@ server: github-mcp-server
 version: "0.1"
 allowlist: [mcp-annotation-check-lab]
 repositories:
-  write: mcp-annotation-check-lab/write-fixtures
+  write: mcp-annotation-check-lab/write-fixture
   read: mcp-annotation-check-lab/read-fixtures
 # Repository-level state only, so the shakedown needs no fixed issue yet.
 standard_read_only_fields:
