@@ -138,3 +138,7 @@ syntax differs, fix `server_params`.
 
 To record here: both image tags, their digests (`image_digest`), the tool count of each
 list, the date, and whether the flag syntax matched `--help`.
+
+## Before writing `packs/github.yaml`
+
+Tools with no repository argument by design (`get_me`, query-only search tools) can't be enabled yet. The pack check requires them to be on `id_only_write_tools`, and the safety check then refuses every call to an ID-only tool that has no ID argument, which stops the run. Fix this first: add a pack list for tools with no repository (only `content`/`other` roles allowed), and have the pack check flag an ID-only tool with no `id` or `repository_id` role, so it fails before the first call instead of in the middle of the run.
