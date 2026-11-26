@@ -65,3 +65,17 @@ tools:
     argument_roles: {owner: owner, repo: repository, issue_number: id, title: content}
     fields: *issue_fields
     supplies: {issue.title: title}
+  # Same pattern as the labels tool (github/github-mcp-server#3760: "not tested
+  # live"). Claims destructiveHint: false, but its description says it replaces the
+  # assignees. The fixture assigns the token's own account; the call sets an empty
+  # list. Expected: FINDING (the account is removed from the assignees).
+  update_issue_assignees:
+    fixture: issue_with_assignee
+    repository: write
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      issue_number: "{fixture.issue_number}"
+      assignees: []
+    argument_roles: {owner: owner, repo: repository, issue_number: id, assignees: content}
+    fields: *issue_fields
