@@ -131,3 +131,28 @@ def test_pass_detail_names_fields():
     )
     assert v.detail == "no change observed in issue.labels, issue.title"
     assert v.diff == {}
+
+
+def test_supplied_none_clearing_a_value_is_finding():
+    v = judge_non_destructive(
+        rec(issue__title="old"), rec(issue__title=None), [TITLE], {"issue.title": None}
+    )
+    assert v.outcome is Outcome.FINDING
+    assert v.changed == {"issue.title": ("old", None)}
+
+
+def test_supplied_empty_string_clearing_a_value_is_finding():
+    v = judge_non_destructive(
+        rec(issue__title="old"), rec(issue__title=""), [TITLE], {"issue.title": ""}
+    )
+    assert v.outcome is Outcome.FINDING
+
+
+def test_previous_empty_string_counts_as_empty():
+    v = judge_non_destructive(rec(issue__title=""), rec(issue__title="x"), [TITLE], {})
+    assert v.outcome is Outcome.PASS
+    assert v.diff == {"issue.title": ("", "x")}
+    supplied = judge_non_destructive(
+        rec(issue__title=""), rec(issue__title="x"), [TITLE], {"issue.title": "x"}
+    )
+    assert supplied.outcome is Outcome.PASS

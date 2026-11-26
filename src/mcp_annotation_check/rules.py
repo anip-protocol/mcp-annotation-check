@@ -10,6 +10,11 @@ def _names(fields: list[FieldSpec]) -> str:
     return ", ".join(f.path for f in fields)
 
 
+def _empty(value: Any) -> bool:
+    """A scalar with nothing in it: setting it is additive, clearing to it is a loss."""
+    return value is None or value == ""
+
+
 def diff_fields(
     before: Recorded, after: Recorded, fields: list[FieldSpec]
 ) -> dict[str, tuple[Any, Any]]:
@@ -65,8 +70,11 @@ def judge_non_destructive(
         if f.kind is FieldKind.COLLECTION:
             if (b or frozenset()) - (a or frozenset()):
                 findings[f.path] = (b, a)
-        elif b is not None and b != a:
-            if f.path in supplied and a == supplied[f.path]:
+        elif not _empty(b) and b != a:
+            # Clearing a value (to None or "") loses it without a replacement, even
+            # when the caller asked for that: only a supplied non-empty value is an
+            # OBSERVATION.
+            if f.path in supplied and a == supplied[f.path] and not _empty(a):
                 observations[f.path] = (b, a)
             else:
                 findings[f.path] = (b, a)
