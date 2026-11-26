@@ -415,3 +415,75 @@ async def test_non_ascii_key_refused_even_without_an_owner_word():
     gh = GitHub()
     with pytest.raises(SafetyRefusal, match="non-ASCII"):
         await make_before_call(gh.rest, pack())("some_tool", {"tïtle": "x"})
+
+
+# --- owners must be ASCII names, compared with .lower() (final fix wave) -------------
+
+# U+017F LATIN SMALL LETTER LONG S casefolds to "s"; U+212A KELVIN SIGN lowers to "k".
+LONG_S_ORG = "teſt-org"
+KELVIN_ORG = "test-org-K"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"owner": LONG_S_ORG, "repo": "w"},
+        {"owner": LONG_S_ORG},
+        {"repo": f"{LONG_S_ORG}/w"},
+        {"full_name": f"{LONG_S_ORG}/w"},
+        {"owner": LONG_S_ORG, "repository": "write-repo"},
+        {"nested": {"org": LONG_S_ORG}},
+        {"owner": "test org"},
+        {"repo": "test org/w"},
+    ],
+)
+async def test_non_ascii_or_malformed_owner_value_refused(arguments):
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal):
+        await make_before_call(gh.rest, pack())("add_labels", arguments)
+    assert gh.requests == []
+
+
+async def test_kelvin_sign_owner_does_not_match_lowercased_allowlist():
+    gh = GitHub()
+    allow = pack(allowlist=[ORG, "test-org-k"])
+    with pytest.raises(SafetyRefusal):
+        await make_before_call(gh.rest, allow)("add_labels", {"owner": KELVIN_ORG})
+
+
+async def test_non_ascii_allowlist_entry_never_matches():
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal):
+        await make_before_call(gh.rest, pack(allowlist=[LONG_S_ORG]))(
+            "add_labels", {"owner": "test-org"}
+        )
+
+
+async def test_resolved_repository_owner_must_be_an_ascii_name():
+    gh = GitHub({"/repositories/5": repo(f"{LONG_S_ORG}/w")})
+    with pytest.raises(SafetyRefusal, match="not on the allowlist"):
+        await make_before_call(gh.rest, pack())("get_repository", {"repository_id": 5})
+
+
+async def test_preflight_refuses_non_ascii_owner_that_casefolds_to_the_allowlist():
+    gh = GitHub({"/user/repos": [repo(READ), repo(WRITE), repo(f"{LONG_S_ORG}/x")]})
+    with pytest.raises(SafetyRefusal, match="preflight 3"):
+        await preflight(gh.rest, TOKEN, pack(), LOGIN)
+
+
+async def test_preflight_refuses_non_ascii_org_that_casefolds_to_the_allowlist():
+    gh = GitHub({"/user/orgs": [{"login": ORG}, {"login": LONG_S_ORG}]})
+    with pytest.raises(SafetyRefusal, match="preflight 4"):
+        await preflight(gh.rest, TOKEN, pack(), LOGIN)
+
+
+async def test_preflight_refuses_non_ascii_owned_repo_owner():
+    gh = GitHub({"/user/repos?affiliation=owner": [repo(f"{LONG_S_ORG}/x")]})
+    with pytest.raises(SafetyRefusal, match="preflight 4"):
+        await preflight(gh.rest, TOKEN, pack(), LOGIN)
+
+
+async def test_preflight_refuses_non_ascii_login_that_casefolds_to_the_expected_one():
+    gh = GitHub({"/user": {"login": "teſt-account"}})
+    with pytest.raises(SafetyRefusal, match="preflight 2"):
+        await preflight(gh.rest, TOKEN, pack(), LOGIN)

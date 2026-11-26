@@ -18,7 +18,12 @@ Preflight (`preflight`), in order, using only GET requests:
      passes vacuously and proves nothing beyond step 3. Which case holds is an
      observation recorded in docs/verification.md, not something this code can tell.
 
-Owners and logins are compared case-insensitively, as GitHub treats them.
+Owners and logins are compared case-insensitively, as GitHub treats them, with
+`.lower()` and only after checking that they are ASCII names (letters, digits, `_`,
+`.`, `-`): `casefold()` or `lower()` on other text maps look-alikes such as U+017F
+(`ſ`, which casefolds to `s`) or U+212A (the Kelvin sign, which lowers to `k`) onto
+allowlisted names. An owner, login or allowlist entry that is not an ASCII name never
+matches anything.
 
 Per-call checks (`make_before_call`):
   - The content rule (`pack.check_content`) is re-applied to the rendered arguments.
@@ -115,8 +120,23 @@ class SafetyRefusal(Exception):
     pass
 
 
+def _ascii_name(value: Any) -> bool:
+    return isinstance(value, str) and _NAME.fullmatch(value) is not None
+
+
+def _key(value: Any) -> str | None:
+    """The comparison form of an owner or login: lower case, or None if it is not
+    an ASCII name (and so can never match)."""
+    return value.lower() if _ascii_name(value) else None
+
+
 def _allowed(pack: Pack) -> set[str]:
-    return {a.casefold() for a in pack.allowlist if isinstance(a, str)}
+    return {a.lower() for a in pack.allowlist if _ascii_name(a)}
+
+
+def _on_allowlist(owner: Any, allowed: set[str]) -> bool:
+    key = _key(owner)
+    return key is not None and key in allowed
 
 
 async def _get(rest: GitHubRest, path: str, what: str, token: str = "", **params: Any) -> Any:
@@ -158,7 +178,7 @@ async def preflight(rest: GitHubRest, token: str, pack: Pack, expected_login: st
     # 2. The account.
     user = await _get(rest, "/user", "preflight 2", token)
     login = user.get("login") if isinstance(user, dict) else None
-    if not isinstance(login, str) or login.casefold() != expected_login.casefold():
+    if _key(login) is None or _key(login) != _key(expected_login):
         raise SafetyRefusal(
             f"preflight 2: the token belongs to {login!r}, "
             f"not the dedicated test account {expected_login!r}"
@@ -166,15 +186,17 @@ async def preflight(rest: GitHubRest, token: str, pack: Pack, expected_login: st
 
     # 3. Every repository the token can access.
     repos = _repo_entries(await _get(rest, "/user/repos", "preflight 3", token), "preflight 3")
-    outside = sorted(name for name, owner in repos if owner.casefold() not in allowed)
+    outside = sorted(name for name, owner in repos if not _on_allowlist(owner, allowed))
     if outside:
         raise SafetyRefusal(
             f"preflight 3: repositories outside the allowlist are reachable: {', '.join(outside)}"
         )
     if not pack.repositories:
         raise SafetyRefusal("preflight 3: the pack names no repositories")
-    seen = {name.casefold() for name, _ in repos}
-    missing = sorted(r for r in pack.repositories.values() if r.casefold() not in seen)
+    seen = {name.lower() for name, _ in repos if name.isascii()}
+    missing = sorted(
+        r for r in pack.repositories.values() if not r.isascii() or r.lower() not in seen
+    )
     if missing:
         raise SafetyRefusal(
             f"preflight 3: pack repositories the token cannot reach: {', '.join(missing)}"
@@ -187,7 +209,7 @@ async def preflight(rest: GitHubRest, token: str, pack: Pack, expected_login: st
     ):
         raise SafetyRefusal("preflight 4: expected a list of organizations")
     org_logins = sorted(o["login"] for o in orgs)
-    extra = [o for o in org_logins if o.casefold() not in allowed]
+    extra = [o for o in org_logins if not _on_allowlist(o, allowed)]
     if extra:
         raise SafetyRefusal(
             f"preflight 4: the account belongs to organizations outside the allowlist: "
@@ -196,7 +218,7 @@ async def preflight(rest: GitHubRest, token: str, pack: Pack, expected_login: st
     owned = _repo_entries(
         await _get(rest, "/user/repos", "preflight 4", token, affiliation="owner"), "preflight 4"
     )
-    owned_outside = sorted(name for name, owner in owned if owner.casefold() not in allowed)
+    owned_outside = sorted(name for name, owner in owned if not _on_allowlist(owner, allowed))
     if owned_outside:
         raise SafetyRefusal(
             f"preflight 4: the account owns repositories outside the allowlist: "
@@ -215,7 +237,7 @@ async def preflight(rest: GitHubRest, token: str, pack: Pack, expected_login: st
 
 def _split(value: str, key: str, tool: str) -> tuple[str, str]:
     owner, sep, name = value.partition("/")
-    if not sep or not owner or not _NAME.fullmatch(name) or name in (".", ".."):
+    if not sep or not _ascii_name(owner) or not _ascii_name(name) or name in (".", ".."):
         raise SafetyRefusal(f"{tool}: cannot resolve {key}={value!r} to owner/name")
     return owner, name
 
@@ -254,7 +276,7 @@ def _level(d: dict, tool: str, named: _Named, top: bool) -> None:
         words = _words(key)
         kind = "".join(words)
         if kind in _OWNER_KEYS:
-            if not isinstance(value, str) or not value:
+            if not _ascii_name(value):
                 raise SafetyRefusal(f"{tool}: {key}={value!r} is not an owner name")
             owners.append(value)
         elif kind in _REPO_KEYS or kind in _FULL_NAME_KEYS:
@@ -270,7 +292,7 @@ def _level(d: dict, tool: str, named: _Named, top: bool) -> None:
                 f"{tool}: cannot interpret argument {key!r}, which may name an owner or "
                 "repository; refusing"
             )
-    distinct = {o.casefold(): o for o in owners}
+    distinct = {o.lower(): o for o in owners}
     named.owners.extend(owners)
     for key, value, bare_allowed in repos:
         if "/" in value:
@@ -353,7 +375,7 @@ async def _resolve_ids(
     pairs: list[tuple[str, str]],
     allowed: set[str],
 ) -> None:
-    repos = {f"{o}/{n}".casefold(): f"{o}/{n}" for o, n in pairs}
+    repos = {f"{o}/{n}".lower(): f"{o}/{n}" for o, n in pairs}
     ids = [(k, v) for k, v in arguments.items() if isinstance(k, str) and _looks_like_id(_norm(k))]
     if not ids:
         raise SafetyRefusal(f"{tool}: an ID-only write tool with no ID argument to resolve")
@@ -363,7 +385,7 @@ async def _resolve_ids(
             continue  # resolved for every tool by before_call
         if norm in _GLOBAL_IDS:
             owner, _ = await _resolve(rest, tool, key, _GLOBAL_IDS[norm], None, value)
-            if owner.casefold() not in allowed:
+            if not _on_allowlist(owner, allowed):
                 raise SafetyRefusal(
                     f"{tool}: {key}={value} belongs to {owner!r}, which is not on the allowlist"
                 )
@@ -375,7 +397,12 @@ async def _resolve_ids(
                 )
             (repo,) = repos.values()
             owner, name = await _resolve(rest, tool, key, _SCOPED_IDS[norm], repo, value)
-            if name is None or f"{owner}/{name}".casefold() != repo.casefold():
+            if (
+                name is None
+                or not _ascii_name(owner)
+                or not _ascii_name(name)
+                or f"{owner}/{name}".lower() != repo.lower()
+            ):
                 raise SafetyRefusal(
                     f"{tool}: {key}={value} could not be confirmed to belong to {repo}"
                 )
@@ -397,11 +424,11 @@ def make_before_call(rest: GitHubRest, pack: Pack) -> Callable[[str, dict], Awai
         named = _Named()
         _walk(arguments, tool, named)
         for owner in named.owners:
-            if owner.casefold() not in allowed:
+            if not _on_allowlist(owner, allowed):
                 raise SafetyRefusal(f"{tool}: owner {owner!r} is not on the allowlist")
         for key, value in named.repo_ids:
             owner, _ = await _resolve(rest, tool, key, _REPOSITORY_BY_ID, None, value)
-            if owner.casefold() not in allowed:
+            if not _on_allowlist(owner, allowed):
                 raise SafetyRefusal(
                     f"{tool}: {key}={value} belongs to {owner!r}, which is not on the allowlist"
                 )
