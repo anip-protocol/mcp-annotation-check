@@ -23,8 +23,11 @@ WITHHELD = "withheld: see private-findings.md"
 PRIVATE_FLAG = "Report privately to the server's maintainers first."
 NOT_OBSERVED = "Changes outside the compared fields are not observed."
 PUBLISH_BLOCKED = (
-    "Do not publish until the withheld findings are disclosed. A reader can infer the "
-    "withheld tool from this report (the full tools/list is in the header)."
+    "Do not publish this report until every withheld finding is fixed by the server's "
+    "maintainers or 90 days have passed since it was reported to them privately, "
+    "whichever comes first. A reader can infer the withheld tool from this report (the "
+    "full tools/list is in the header). Findings that are already public may be posted "
+    "separately."
 )
 
 _HINT_NAMES = {

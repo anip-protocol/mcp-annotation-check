@@ -103,7 +103,7 @@ def test_cli_self_test_writes_reports(tmp_path, capsys):
     out = capsys.readouterr().out
     assert str(tmp_path / "report.md") in out
     assert "finding" in out
-    assert "Do not publish until the withheld findings are disclosed" in out
+    assert "Do not publish this report until every withheld finding is fixed" in out
     for name in ("report.md", "report.json", "private-findings.md"):
         assert (tmp_path / name).is_file()
 
@@ -126,8 +126,15 @@ def test_unjudged_verdict_diff_is_marked_not_judged():
 
 async def test_withheld_results_block_publication(tmp_path):
     md, data, _ = await written(tmp_path)
-    notice = "Do not publish until the withheld findings are disclosed"
+    notice = "Do not publish this report until every withheld finding is fixed"
     assert data["publish_blocked"] is True
+    assert data["publish_notice"] == (
+        "Do not publish this report until every withheld finding is fixed by the server's "
+        "maintainers or 90 days have passed since it was reported to them privately, "
+        "whichever comes first. A reader can infer the withheld tool from this report (the "
+        "full tools/list is in the header). Findings that are already public may be posted "
+        "separately."
+    )
     assert data["publish_notice"].startswith(notice)
     # prominent: the banner comes before the run header
     assert notice in md
