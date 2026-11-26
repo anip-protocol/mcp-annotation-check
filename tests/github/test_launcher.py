@@ -210,3 +210,30 @@ def test_run_success_path_passes_secrets_closes_rest_and_keeps_token_off_args(
     assert seen["written"] == tmp_path
     captured = capsys.readouterr()
     assert TOKEN not in captured.out + captured.err
+
+
+DOCKER_VARS = (
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "DOCKER_CERT_PATH",
+    "DOCKER_TLS_VERIFY",
+)
+
+
+def test_docker_client_settings_reach_docker_run(monkeypatch):
+    monkeypatch.setenv(ENV, TOKEN)
+    for name in DOCKER_VARS:
+        monkeypatch.setenv(name, f"value-of-{name}")
+    params = launcher.server_params("img:1", ["default"], [])
+    for name in DOCKER_VARS:
+        assert params.env[name] == f"value-of-{name}"
+        assert name not in params.args  # docker's own settings, not the container's
+
+
+def test_unset_docker_settings_are_not_invented(monkeypatch):
+    monkeypatch.setenv(ENV, TOKEN)
+    for name in DOCKER_VARS:
+        monkeypatch.delenv(name, raising=False)
+    params = launcher.server_params("img:1", ["default"], [])
+    assert not set(DOCKER_VARS) & set(params.env)

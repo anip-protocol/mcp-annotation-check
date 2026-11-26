@@ -6,7 +6,8 @@ so the token travels only through the environment of the docker process.
 
 The SDK starts the child with `get_default_environment() | params.env`, which already
 inherits PATH and HOME on POSIX. We still set PATH (and HOME when present) explicitly,
-so the docker binary is found whatever the SDK's defaults are.
+so the docker binary is found whatever the SDK's defaults are, and pass the docker
+CLI's own settings (DOCKER_HOST and friends) when they are set.
 """
 
 import os
@@ -16,6 +17,15 @@ from mcp import StdioServerParameters
 
 TOKEN_ENV = "MCP_ANNOTATION_CHECK_GITHUB_TOKEN"
 SERVER_TOKEN_ENV = "GITHUB_PERSONAL_ACCESS_TOKEN"
+# The docker CLI's own settings: passed to `docker run` when set, so it talks to the
+# same daemon that `image_digest` (which inherits the whole environment) inspected.
+DOCKER_ENV = (
+    "DOCKER_HOST",
+    "DOCKER_CONTEXT",
+    "DOCKER_CONFIG",
+    "DOCKER_CERT_PATH",
+    "DOCKER_TLS_VERIFY",
+)
 
 
 def server_params(
@@ -33,7 +43,7 @@ def server_params(
     if features:
         args.append(f"--features={','.join(features)}")
     env = {SERVER_TOKEN_ENV: token}
-    for key in ("PATH", "HOME"):
+    for key in ("PATH", "HOME", *DOCKER_ENV):
         if key in os.environ:
             env[key] = os.environ[key]
     return StdioServerParameters(command="docker", args=args, env=env)
