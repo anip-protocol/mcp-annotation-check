@@ -178,6 +178,7 @@ async def test_shakedown_preflight_failure_message_with_token_is_redacted(tmp_pa
     await rest.aclose()
     text = (tmp_path / "shakedown.json").read_text()
     assert ok is False
+    assert json.loads(text)["steps"]["preflight"]["passed"] is False
     assert REDACTED in text and TOKEN not in text
 
 
@@ -202,7 +203,6 @@ async def test_shakedown_records_failed_step_and_marks_rest_not_run(tmp_path):
     assert steps["preflight"]["passed"] is False
     assert steps["start"]["status"] == "not run"
     assert steps["snapshot"]["status"] == "not run"
-    assert TOKEN not in (tmp_path / "shakedown.json").read_text()
 
 
 def test_shakedown_cli_requires_token(monkeypatch, tmp_path, capsys):
