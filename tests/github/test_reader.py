@@ -267,3 +267,143 @@ async def test_github_error_message_has_no_headers():
     assert info.value.status == 401
     assert "/user" in text
     assert TOKEN not in text and "Bearer" not in text and "s3" not in text
+
+
+# --- repository and pull request fields, and the open_pr fixture (final fix wave) ---
+
+
+async def test_snapshot_repo_refs_reads_heads_and_tags():
+    seen: list[str] = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        if request.url.path == "/repos/o/write/git/matching-refs/heads/":
+            return httpx.Response(
+                200,
+                json=[
+                    {"ref": "refs/heads/main", "object": {"sha": "a1"}},
+                    {"ref": "refs/heads/topic", "object": {"sha": "b2"}},
+                ],
+            )
+        if request.url.path == "/repos/o/write/git/matching-refs/tags/":
+            return httpx.Response(200, json=[{"ref": "refs/tags/v1", "object": {"sha": "c3"}}])
+        return httpx.Response(404, json={})
+
+    reader, _ = make(handler)
+    rec = await reader.snapshot(
+        [FieldSpec("repo.refs", FieldKind.COLLECTION)], {"repository": "o/write"}
+    )
+    assert rec.snapshot == {
+        "repo.refs": frozenset(
+            {("refs/heads/main", "a1"), ("refs/heads/topic", "b2"), ("refs/tags/v1", "c3")}
+        )
+    }
+    assert seen == [
+        "/repos/o/write/git/matching-refs/heads/",
+        "/repos/o/write/git/matching-refs/tags/",
+    ]
+    assert rec.timestamps == {}
+
+
+async def test_snapshot_repo_issues_lists_every_state():
+    params: list[dict] = []
+
+    def handler(request):
+        assert request.url.path == "/repos/o/read/issues"
+        params.append(dict(request.url.params))
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "number": 1,
+                    "title": "open one",
+                    "state": "open",
+                    "labels": [{"name": "d"}, {"name": "c"}],
+                    "reactions": {"total_count": 2},
+                },
+                {"number": 2, "title": "closed one", "state": "closed", "labels": []},
+            ],
+        )
+
+    reader, _ = make(handler)
+    rec = await reader.snapshot(
+        [FieldSpec("repo.issues", FieldKind.COLLECTION)], {"repository": "o/read"}
+    )
+    assert rec.snapshot["repo.issues"] == frozenset(
+        {(1, "open one", "open", ("c", "d"), 2), (2, "closed one", "closed", (), 0)}
+    )
+    assert params == [{"per_page": "100", "state": "all"}]
+
+
+async def test_snapshot_pr_fields():
+    pr = {
+        "state": "open",
+        "title": "PR title",
+        "body": "PR body",
+        "requested_reviewers": [{"login": "bob"}, {"login": "carol"}],
+        "updated_at": "2026-02-02T00:00:00Z",
+    }
+    seen: list[str] = []
+
+    def handler(request):
+        seen.append(request.url.path)
+        assert request.url.path == "/repos/o/write/pulls/3"
+        return httpx.Response(200, json=pr)
+
+    reader, _ = make(handler)
+    fields = [
+        FieldSpec("pr.state", FieldKind.SCALAR),
+        FieldSpec("pr.title", FieldKind.SCALAR),
+        FieldSpec("pr.body", FieldKind.SCALAR),
+        FieldSpec("pr.requested_reviewers", FieldKind.COLLECTION),
+    ]
+    rec = await reader.snapshot(fields, {"repository": "o/write", "pr_number": 3})
+    assert rec.snapshot == {
+        "pr.state": "open",
+        "pr.title": "PR title",
+        "pr.body": "PR body",
+        "pr.requested_reviewers": frozenset({"bob", "carol"}),
+    }
+    assert rec.timestamps == {"pr": "2026-02-02T00:00:00Z"}
+    assert seen == ["/repos/o/write/pulls/3"]  # read once, cached for every pr.* field
+
+
+async def test_open_pr_fixture_happy_path_and_cleanup():
+    def handler(request):
+        p, m = request.url.path, request.method
+        if m == "GET" and p == "/repos/o/write":
+            return httpx.Response(200, json={"default_branch": "main"})
+        if m == "GET" and p == "/repos/o/write/git/ref/heads/main":
+            return httpx.Response(200, json={"object": {"sha": "abc123"}})
+        if m == "POST" and p == "/repos/o/write/pulls":
+            return httpx.Response(201, json={"number": 11})
+        if m in ("POST", "PUT", "PATCH"):
+            return httpx.Response(201, json={})
+        if m == "DELETE":
+            return httpx.Response(204)
+        return httpx.Response(404, json={})
+
+    reader, calls = make(handler)
+    e = entry("open_pr", "t")
+    fixture = await reader.create_fixture(e, "r")
+    assert fixture == {"repository": "o/write", "pr_number": 11, "branch": "mac-r-t"}
+    assert [c for c in calls if c[0] != "GET"] == [
+        ("POST", "/repos/o/write/git/refs", {"ref": "refs/heads/mac-r-t", "sha": "abc123"}),
+        (
+            "PUT",
+            "/repos/o/write/contents/fixtures/mac-r-t.txt",
+            {"message": "fixture mac-r-t", "content": "Zml4dHVyZQo=", "branch": "mac-r-t"},
+        ),
+        (
+            "POST",
+            "/repos/o/write/pulls",
+            {"title": "mac-r-t", "head": "mac-r-t", "base": "main", "body": "fixture"},
+        ),
+    ]
+    calls.clear()
+    await reader.cleanup(e, fixture)
+    assert calls == [
+        ("PATCH", "/repos/o/write/pulls/11", {"state": "closed"}),
+        ("POST", "/repos/o/write/issues/11/labels", {"labels": ["mcp-annotation-check:done"]}),
+        ("DELETE", "/repos/o/write/git/refs/heads/mac-r-t", None),
+    ]
