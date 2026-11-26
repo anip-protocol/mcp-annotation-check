@@ -129,11 +129,56 @@ async def test_shakedown_reports_validation_problems_and_exits_nonzero(tmp_path)
     assert report["steps"]["validate"]["passed"] is False
 
 
-async def test_shakedown_json_has_no_token(tmp_path):
+class LeakyReader(SpyReader):
+    async def snapshot(self, *a, **k):
+        raise RuntimeError(f"boom with {TOKEN} inside")
+
+
+async def test_shakedown_json_has_no_token(tmp_path, capsys):
+    from mcp_annotation_check.redact import REDACTED
+
     pack = pack_for_github()
-    # A failing preflight whose message carries the token still must not leak it.
-    ok, _ = await run_shakedown(pack, tmp_path, [])
-    assert TOKEN not in (tmp_path / "shakedown.json").read_text()
+
+    @asynccontextmanager
+    async def open_client():
+        async with Client(build_fake_server(FakeStore())) as client:
+            yield client
+
+    rest = make_rest([])
+    ok = await shakedown(open_client, rest, LeakyReader(rest, pack.repositories),
+                         pack, TOKEN, LOGIN, {}, tmp_path)
+    await rest.aclose()
+    text = (tmp_path / "shakedown.json").read_text()
+    steps = json.loads(text)["steps"]
+    assert ok is False
+    assert steps["snapshot"]["passed"] is False
+    assert REDACTED in steps["snapshot"]["error"]
+    assert TOKEN not in text
+    captured = capsys.readouterr()
+    assert TOKEN not in captured.out + captured.err
+
+
+async def test_shakedown_preflight_failure_message_with_token_is_redacted(tmp_path):
+    from mcp_annotation_check.redact import REDACTED
+
+    pack = pack_for_github()
+    # The account login in the error comes from the response; make it carry the token.
+    rest = GitHubRest(
+        TOKEN,
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"login": TOKEN})),
+    )
+
+    @asynccontextmanager
+    async def open_client():
+        raise AssertionError("must not start")
+        yield
+
+    ok = await shakedown(open_client, rest, GitHubReader(rest, pack.repositories),
+                         pack, TOKEN, LOGIN, {}, tmp_path)
+    await rest.aclose()
+    text = (tmp_path / "shakedown.json").read_text()
+    assert ok is False
+    assert REDACTED in text and TOKEN not in text
 
 
 async def test_shakedown_records_failed_step_and_marks_rest_not_run(tmp_path):
