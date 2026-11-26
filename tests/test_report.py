@@ -188,6 +188,52 @@ def test_unjudged_counts_in_coverage():
     assert counts["error"] == 0
 
 
+def test_observation_under_unjudged_is_counted():
+    from mcp_annotation_check.claims import Check
+    from mcp_annotation_check.report import ToolResult, coverage, verdict_counts
+    from mcp_annotation_check.rules import Outcome
+    from mcp_annotation_check.snapshot import Verdict
+
+    def result(tool, outcome, *verdict_outcomes, private=False):
+        return ToolResult(
+            tool=tool,
+            description="",
+            claims=None,
+            outcome=outcome,
+            verdicts=[Verdict(Check.NON_DESTRUCTIVE, o, "") for o in verdict_outcomes],
+            skip_reason=None,
+            error=None,
+            calls=[],
+            waited_s=0.0,
+            custom=None,
+            private=private,
+        )
+
+    a = result("a", Outcome.UNJUDGED, Outcome.UNJUDGED, Outcome.OBSERVATION)
+    b = result("b", Outcome.FINDING, Outcome.FINDING, Outcome.PASS)
+    c = result("c", Outcome.FINDING, Outcome.FINDING, private=True)
+    results = [a, b]
+    assert coverage(results)["unjudged"] == 1
+    assert coverage(results)["observation"] == 0
+    assert verdict_counts(results) == {
+        "finding": 1,
+        "observation": 1,
+        "unjudged": 1,
+        "pass": 1,
+    }
+
+    public = [r for r in [a, b, c] if not r.private]
+    assert verdict_counts(public)["finding"] == 1
+
+
+async def test_report_files_carry_verdict_counts(tmp_path):
+    md, data, _ = await written(tmp_path)
+    assert set(data["verdict_counts"]) == {"finding", "observation", "unjudged", "pass"}
+    assert data["verdict_counts"]["finding"] >= 1
+    assert "Tools with at least one verdict of each kind" in md
+    assert md.index("## Coverage") < md.index("Tools with at least one verdict") < md.index("## Tools")
+
+
 def _unjudged_result():
     from mcp_annotation_check.claims import Check, Claims
     from mcp_annotation_check.report import ToolResult

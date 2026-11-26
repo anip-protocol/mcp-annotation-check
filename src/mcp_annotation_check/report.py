@@ -120,6 +120,17 @@ def coverage(results: list[ToolResult]) -> dict[str, int]:
     return {o.value: sum(r.outcome is o for r in results) for o in _COVERAGE_ORDER}
 
 
+_VERDICT_KINDS = [Outcome.FINDING, Outcome.OBSERVATION, Outcome.UNJUDGED, Outcome.PASS]
+
+
+def verdict_counts(results: list[ToolResult]) -> dict[str, int]:
+    """Tools with at least one verdict of each kind, whatever their headline outcome."""
+    return {
+        o.value: sum(any(v.outcome is o for v in r.verdicts) for r in results)
+        for o in _VERDICT_KINDS
+    }
+
+
 def outcome_reason(r: ToolResult) -> str | None:
     """Why a tool is skipped, errored or unjudged: the reason shown next to its count."""
     if r.outcome is Outcome.SKIPPED:
@@ -151,6 +162,7 @@ def _json_report(header: RunHeader, public: list[ToolResult], withheld: int) -> 
         "publish_notice": PUBLISH_BLOCKED if withheld else None,
         "header": jsonable(header),
         "coverage": coverage(public),
+        "verdict_counts": verdict_counts(public),
         "withheld": withheld,
         "results": [jsonable(r) for r in public],
     }
@@ -171,6 +183,14 @@ def _markdown_report(header: RunHeader, public: list[ToolResult], withheld: int)
     lines += [f"| {name} | {count} |" for name, count in coverage(public).items()]
     if withheld:
         lines.append(f"| withheld | {withheld} |")
+    lines += [
+        "",
+        "Tools with at least one verdict of each kind (a tool can appear in several rows):",
+        "",
+        "| Verdict | Tools |",
+        "|---|---|",
+    ]
+    lines += [f"| {name} | {count} |" for name, count in verdict_counts(public).items()]
     for label, outcome in (
         ("Skipped", Outcome.SKIPPED),
         ("Errors", Outcome.ERROR),
