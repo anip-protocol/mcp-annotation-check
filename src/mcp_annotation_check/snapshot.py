@@ -21,9 +21,10 @@ class FieldSpec:
 # Collection fields whose elements are tuples, each describing one object (a comment,
 # a ref, an issue, a label). Editing one object in place removes one tuple and adds
 # another, which the non-destructive rule would read as a loss. Until elements are
-# matched by identity, a non-destructive check over any of these is an ERROR, not a
-# verdict (ruling R17). Read-only and idempotent checks compare for equality and still
-# use them.
+# matched by identity, a non-destructive check judges only the other (plain) fields: a
+# FINDING there is reported (naming the composite fields it did not judge), otherwise
+# the check is UNJUDGED, which is not a failed call (ruling R17, amended). Read-only and
+# idempotent checks compare for equality and still use them.
 COMPOSITE_FIELDS = frozenset({"issue.comments", "repo.refs", "repo.issues", "repo.labels"})
 
 
@@ -44,6 +45,7 @@ class Outcome(StrEnum):
     OBSERVATION = "observation"
     SKIPPED = "skipped"
     ERROR = "error"
+    UNJUDGED = "unjudged"
 
 
 @dataclass(frozen=True)

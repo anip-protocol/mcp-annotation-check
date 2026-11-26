@@ -621,14 +621,14 @@ class CommentsReader(FakeReader):
 
 
 COMMENTS = FieldSpec("issue.comments", FieldKind.COLLECTION)
-COMPOSITE_ERROR = "field issue.comments can't be judged non-destructively yet (composite elements)"
+COMPOSITE_DETAIL = "not judged yet (composite elements): issue.comments"
 
 
 def test_composite_fields_are_defined_in_one_place():
     assert COMPOSITE_FIELDS == {"issue.comments", "repo.refs", "repo.issues", "repo.labels"}
 
 
-async def test_non_destructive_check_on_composite_field_is_error():
+async def test_composite_field_alone_is_unjudged_not_error():
     store = FakeStore()
     pack = load_pack(FAKE_PACK)
     entry = replace(pack.entries["append_note"], fields=[COMMENTS])
@@ -638,23 +638,58 @@ async def test_non_destructive_check_on_composite_field_is_error():
     got = by_tool(results)
 
     labels = got["set_labels"]
-    assert labels.outcome is Outcome.ERROR
-    assert labels.error == COMPOSITE_ERROR
+    assert labels.outcome is Outcome.UNJUDGED
+    assert labels.error is None
     (verdict,) = labels.verdicts
     assert verdict.check is Check.NON_DESTRUCTIVE
-    assert verdict.outcome is Outcome.ERROR
-    assert verdict.detail == COMPOSITE_ERROR
+    assert verdict.outcome is Outcome.UNJUDGED
+    assert COMPOSITE_DETAIL in verdict.detail
     assert verdict.schema_text == SCHEMA_TEXT[Check.NON_DESTRUCTIVE]
 
-    # the idempotent check still uses the composite field (equality is safe)
+    # the idempotent check still uses the composite field (equality is safe), and a
+    # finding outranks the unjudged check
     note = got["append_note"]
     verdicts = {v.check: v for v in note.verdicts}
-    assert verdicts[Check.NON_DESTRUCTIVE].outcome is Outcome.ERROR
+    assert verdicts[Check.NON_DESTRUCTIVE].outcome is Outcome.UNJUDGED
     assert verdicts[Check.IDEMPOTENT].outcome is Outcome.FINDING
     assert "issue.comments" in verdicts[Check.IDEMPOTENT].changed
-    assert note.outcome is Outcome.ERROR
-    assert COMPOSITE_ERROR in note.error
+    assert note.outcome is Outcome.FINDING
+    assert note.error is None
     assert store.issues == {}
+
+
+async def test_finding_on_plain_field_wins_over_composite():
+    store = FakeStore()
+    pack = load_pack(FAKE_PACK)
+    plain = pack.entries["set_labels"].fields
+    entry = replace(pack.entries["set_labels"], fields=[*plain, COMMENTS])
+    pack = with_entries(pack, set_labels=entry)
+    _, results = await run_fake(pack=pack, store=store, reader=CommentsReader(store))
+    labels = by_tool(results)["set_labels"]
+    assert labels.outcome is Outcome.FINDING
+    (verdict,) = labels.verdicts
+    assert verdict.outcome is Outcome.FINDING
+    assert "issue.labels" in verdict.changed
+    assert "lost or overwritten: issue.labels" in verdict.detail
+    assert "; not judged yet (composite elements): issue.comments" in verdict.detail
+    assert labels.error is None
+
+
+async def test_finding_outranks_error():
+    from mcp_annotation_check.runner import _most_severe
+
+    store = FakeStore()
+    _, results = await run_fake(store=store)
+    explode = by_tool(results)["explode"]
+    assert explode.calls[0]["is_error"] is True
+    assert explode.outcome is Outcome.FINDING
+    assert "tool returned an error" in explode.error  # the error text is still recorded
+
+    check = Check.NON_DESTRUCTIVE
+    mixed = [Verdict(check, o, "") for o in (Outcome.ERROR, Outcome.FINDING, Outcome.UNJUDGED)]
+    assert _most_severe(mixed) is Outcome.FINDING
+    mixed = [Verdict(check, o, "") for o in (Outcome.OBSERVATION, Outcome.UNJUDGED)]
+    assert _most_severe(mixed) is Outcome.UNJUDGED
 
 
 async def test_read_only_check_still_uses_composite_fields():

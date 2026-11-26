@@ -147,3 +147,35 @@ async def test_nothing_withheld_has_no_publish_banner(tmp_path):
     assert data["publish_blocked"] is False
     assert data["publish_notice"] is None
     assert "Do not publish" not in md
+
+
+def test_unjudged_counts_in_coverage():
+    from mcp_annotation_check.claims import Check
+    from mcp_annotation_check.report import ToolResult, coverage
+    from mcp_annotation_check.rules import Outcome
+    from mcp_annotation_check.snapshot import Verdict
+
+    def result(tool, outcome, *verdict_outcomes):
+        return ToolResult(
+            tool=tool,
+            description="",
+            claims=None,
+            outcome=outcome,
+            verdicts=[Verdict(Check.NON_DESTRUCTIVE, o, "") for o in verdict_outcomes],
+            skip_reason=None,
+            error=None,
+            calls=[],
+            waited_s=0.0,
+            custom=None,
+            private=False,
+        )
+
+    counts = coverage(
+        [
+            result("a", Outcome.FINDING, Outcome.FINDING, Outcome.UNJUDGED),
+            result("b", Outcome.UNJUDGED, Outcome.UNJUDGED),
+        ]
+    )
+    assert counts["finding"] == 1
+    assert counts["unjudged"] == 1
+    assert counts["error"] == 0

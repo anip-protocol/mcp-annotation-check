@@ -5,6 +5,8 @@ after-snapshot (taken even when the call errored), rules, a second call for the
 idempotent check, and cleanup in a `finally`. A call that errored is judged like any
 other: a change against the claim is a FINDING (or OBSERVATION), but with no such
 change the tool is an ERROR ("call failed; no change observed in ..."), never a PASS.
+A non-destructive check over composite fields (snapshot.COMPOSITE_FIELDS) is UNJUDGED
+unless its plain fields show a FINDING; a FINDING outranks every other outcome.
 A failure at any step is an ERROR for that tool only, with one exception: a refusal
 by `before_call` (the per-call safety check) stops the run. The refused tool is an
 ERROR and every remaining tool is SKIPPED with "run stopped after a safety refusal
@@ -60,8 +62,9 @@ _SEVERITY = {
     Outcome.SKIPPED: 0,
     Outcome.PASS: 1,
     Outcome.OBSERVATION: 2,
-    Outcome.FINDING: 3,
+    Outcome.UNJUDGED: 3,
     Outcome.ERROR: 4,
+    Outcome.FINDING: 5,
 }
 
 
@@ -393,22 +396,26 @@ class _ToolCheck:
             return judge_read_only(before, after, fields)
         if check is Check.NON_DESTRUCTIVE:
             composite = [f.path for f in fields if f.path in COMPOSITE_FIELDS]
-            if composite:
-                noun = "field" if len(composite) == 1 else "fields"
-                detail = (
-                    f"{noun} {', '.join(composite)} can't be judged non-destructively yet "
-                    "(composite elements)"
+            plain = [f for f in fields if f.path not in COMPOSITE_FIELDS]
+            supplied = supplied_values(self.entry, self.arguments, plain)
+            verdict = judge_non_destructive(before, after, plain, supplied)
+            if not composite:
+                return verdict
+            note = f"not judged yet (composite elements): {', '.join(composite)}"
+            diff = diff_fields(before, after, fields)
+            if verdict.outcome is Outcome.FINDING:
+                return dataclasses.replace(
+                    verdict, detail=f"{verdict.detail}; {note}", diff=diff
                 )
-                self.errors.append(detail)
-                return Verdict(
-                    check,
-                    Outcome.ERROR,
-                    detail,
-                    schema_text=SCHEMA_TEXT[check],
-                    diff=diff_fields(before, after, fields),
-                )
-            supplied = supplied_values(self.entry, self.arguments, fields)
-            return judge_non_destructive(before, after, fields, supplied)
+            return Verdict(
+                Check.NON_DESTRUCTIVE,
+                Outcome.UNJUDGED,
+                f"{note}; other fields: {verdict.detail}",
+                verdict.changed,
+                verdict.warnings,
+                SCHEMA_TEXT[Check.NON_DESTRUCTIVE],
+                diff,
+            )
         return judge_idempotent(before, after, fields)
 
 

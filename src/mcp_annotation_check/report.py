@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from mcp_annotation_check.claims import Check, Claims
-from mcp_annotation_check.snapshot import Outcome, Verdict
+from mcp_annotation_check.snapshot import COMPOSITE_FIELDS, Outcome, Verdict
 
 STATEMENT = "Findings apply to this image and configuration only."
 WITHHELD = "withheld: see private-findings.md"
@@ -37,6 +37,7 @@ _COVERAGE_ORDER = [
     Outcome.FINDING,
     Outcome.OBSERVATION,
     Outcome.SKIPPED,
+    Outcome.UNJUDGED,
     Outcome.ERROR,
 ]
 
@@ -259,7 +260,8 @@ def _diff_text(v: Verdict, custom: bool = False) -> str:
 
     Under a custom verdict an uncounted field is not necessarily additive, so the
     mark says only that the custom verdict did not count it. A verdict that is an
-    ERROR judged nothing, so its fields are marked "not judged".
+    ERROR judged nothing, so its fields are marked "not judged"; so is a composite
+    field in a non-destructive verdict, which that check does not judge.
     """
     counted = "lost or overwritten" if v.check is Check.NON_DESTRUCTIVE else "changed"
     if v.outcome is Outcome.ERROR:
@@ -270,7 +272,15 @@ def _diff_text(v: Verdict, custom: bool = False) -> str:
         uncounted = "additive"
     out: list[str] = []
     for path, (before, after) in v.diff.items():
-        out.append(f"@@ {path} @@ {counted if path in v.changed else uncounted}")
+        label = counted if path in v.changed else uncounted
+        if (
+            not custom
+            and v.check is Check.NON_DESTRUCTIVE
+            and path in COMPOSITE_FIELDS
+            and path not in v.changed
+        ):
+            label = "not judged"
+        out.append(f"@@ {path} @@ {label}")
         if isinstance(before, frozenset) or isinstance(after, frozenset):
             b, a = before or frozenset(), after or frozenset()
             for item in sorted(b | a, key=lambda x: _sort_key(jsonable(x))):
