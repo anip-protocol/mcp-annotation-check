@@ -26,6 +26,7 @@ from mcp_annotation_check.report import (
     WITHHELD,
     RunHeader,
     ToolResult,
+    outcome_reason,
     write_reports,
 )
 from mcp_annotation_check.runner import list_all_tools, run, tools_list_digest
@@ -79,7 +80,7 @@ def _summary(results: list[ToolResult]) -> list[str]:
         if r.private:
             withheld += 1
             continue
-        reason = r.skip_reason or (r.error if r.outcome.value == "error" else None)
+        reason = outcome_reason(r)
         lines.append(f"  {r.tool}: {r.outcome.value}" + (f" ({reason})" if reason else ""))
     if withheld:
         lines.append(f"  {withheld} {WITHHELD}")

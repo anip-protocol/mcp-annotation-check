@@ -118,6 +118,17 @@ def coverage(results: list[ToolResult]) -> dict[str, int]:
     return {o.value: sum(r.outcome is o for r in results) for o in _COVERAGE_ORDER}
 
 
+def outcome_reason(r: ToolResult) -> str | None:
+    """Why a tool is skipped, errored or unjudged: the reason shown next to its count."""
+    if r.outcome is Outcome.SKIPPED:
+        return r.skip_reason
+    if r.outcome is Outcome.ERROR:
+        return r.error
+    if r.outcome is Outcome.UNJUDGED:
+        return "; ".join(v.detail for v in r.verdicts if v.outcome is Outcome.UNJUDGED) or None
+    return None
+
+
 def write_reports(header: RunHeader, results: list[ToolResult], out_dir: Path) -> None:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -158,14 +169,15 @@ def _markdown_report(header: RunHeader, public: list[ToolResult], withheld: int)
     lines += [f"| {name} | {count} |" for name, count in coverage(public).items()]
     if withheld:
         lines.append(f"| withheld | {withheld} |")
-    for label, outcome, attr in (
-        ("Skipped", Outcome.SKIPPED, "skip_reason"),
-        ("Errors", Outcome.ERROR, "error"),
+    for label, outcome in (
+        ("Skipped", Outcome.SKIPPED),
+        ("Errors", Outcome.ERROR),
+        ("Unjudged", Outcome.UNJUDGED),
     ):
         listed = [r for r in public if r.outcome is outcome]
         if listed:
             lines += ["", f"{label}:", ""]
-            lines += [f"- `{r.tool}`: {_inline(getattr(r, attr) or '')}" for r in listed]
+            lines += [f"- `{r.tool}`: {_inline(outcome_reason(r) or '')}" for r in listed]
     lines += ["", "## Tools", ""]
     if withheld:
         noun = "result" if withheld == 1 else "results"

@@ -186,3 +186,43 @@ def test_unjudged_counts_in_coverage():
     assert counts["finding"] == 1
     assert counts["unjudged"] == 1
     assert counts["error"] == 0
+
+
+def _unjudged_result():
+    from mcp_annotation_check.claims import Check, Claims
+    from mcp_annotation_check.report import ToolResult
+    from mcp_annotation_check.rules import Outcome
+    from mcp_annotation_check.snapshot import Verdict
+
+    detail = "composite fields not judged: issue.comments"
+    return ToolResult(
+        tool="comment_tool",
+        description="",
+        claims=Claims(read_only=None, destructive=False, idempotent=None),
+        outcome=Outcome.UNJUDGED,
+        verdicts=[Verdict(Check.NON_DESTRUCTIVE, Outcome.UNJUDGED, detail)],
+        skip_reason=None,
+        error=None,
+        calls=[],
+        waited_s=0.0,
+        custom=None,
+        private=False,
+    ), detail
+
+
+def test_unjudged_tools_are_listed_with_reasons_in_summary():
+    from mcp_annotation_check.cli import _summary
+
+    result, detail = _unjudged_result()
+    (line,) = _summary([result])
+    assert "comment_tool: unjudged" in line and detail in line
+
+
+async def test_unjudged_tools_are_listed_with_reasons_in_the_coverage_section(tmp_path):
+    header, _ = await run_fake()
+    result, detail = _unjudged_result()
+    write_reports(header, [result], tmp_path)
+    md = (tmp_path / "report.md").read_text()
+    coverage_section = md.split("## Coverage", 1)[1].split("## Tools", 1)[0]
+    assert "Unjudged:" in coverage_section
+    assert f"- `comment_tool`: {detail}" in coverage_section
