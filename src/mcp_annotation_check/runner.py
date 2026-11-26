@@ -1,5 +1,12 @@
 """Serial runner: plan every listed tool, then judge enabled ones one at a time.
 
+Before anything else, the pack is validated against the server's tools/list
+(`pack.validate_pack`). Any problem stops the run there: no fixture is created and
+no tool is called; every listed tool with an enabled entry is SKIPPED with "pack
+validation failed: <n> problem(s)", other listed tools keep their usual skip reason,
+and the problems (and `pack.pack_warnings`) are recorded in the report header, so
+the reports can still be written.
+
 Per judged tool: fixture, arguments, settled before-snapshot, call, settled
 after-snapshot (taken even when the call errored), rules, a second call for the
 idempotent check, and cleanup in a `finally`. A call that errored is judged like any
@@ -29,7 +36,14 @@ from mcp.types import Tool
 
 from mcp_annotation_check import __version__
 from mcp_annotation_check.claims import SCHEMA_TEXT, Check, Claims, applicable_checks, claims_of
-from mcp_annotation_check.pack import Pack, ToolEntry, render_arguments, supplied_values
+from mcp_annotation_check.pack import (
+    Pack,
+    ToolEntry,
+    pack_warnings,
+    render_arguments,
+    supplied_values,
+    validate_pack,
+)
 from mcp_annotation_check.reader import StateReader
 from mcp_annotation_check.redact import redact
 from mcp_annotation_check.report import RunHeader, ToolResult
@@ -90,11 +104,27 @@ async def run(
     """Run every listed tool. Every error text is redacted against `secrets`."""
     secrets = (secrets,) if isinstance(secrets, str) else tuple(secrets)
     listed = await list_all_tools(client)
-    header = _header(client, pack, header_context, listed)
+    problems = [redact(p, secrets) for p in validate_pack(pack, listed)]
+    warnings = [redact(w, secrets) for w in pack_warnings(pack)]
+    header = _header(client, pack, header_context, listed, problems, warnings)
     run_id = uuid.uuid4().hex[:8]
     results: list[ToolResult] = []
     refused_on: str | None = None
+    invalid = f"pack validation failed: {len(problems)} problem(s)" if problems else None
     for tool in listed:
+        if invalid is not None:
+            # Nothing is called and no fixture is created.
+            claims = claims_of(tool)
+            entry = pack.entries.get(tool.name)
+            reason = invalid if entry is not None and entry.status == "enabled" else None
+            reason = reason or _skip_reason(entry, applicable_checks(claims))
+            results.append(
+                _unjudged(
+                    tool.name, tool.description or "", claims, Outcome.SKIPPED,
+                    skip_reason=reason,
+                )
+            )
+            continue
         if refused_on is not None:
             results.append(
                 _unjudged(
@@ -135,7 +165,12 @@ async def list_all_tools(client: Client) -> list[Tool]:
 
 
 def _header(
-    client: Client, pack: Pack, context: dict[str, Any], listed: list[Tool]
+    client: Client,
+    pack: Pack,
+    context: dict[str, Any],
+    listed: list[Tool],
+    problems: list[str],
+    warnings: list[str],
 ) -> RunHeader:
     tools_list = [t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in listed]
     canonical = json.dumps(tools_list, sort_keys=True, separators=(",", ":"))
@@ -155,7 +190,20 @@ def _header(
         tools_list=tools_list,
         tools_list_sha256=hashlib.sha256(canonical.encode()).hexdigest(),
         standard_read_only_fields=[f.path for f in pack.standard_read_only_fields],
+        pack_problems=problems,
+        pack_warnings=warnings,
     )
+
+
+def _skip_reason(entry: ToolEntry | None, checks: list[Check]) -> str | None:
+    """Why a listed tool is not judged, or None if it is."""
+    if not checks:
+        return "no explicit claim"
+    if entry is None:
+        return "no pack entry yet"
+    if entry.status == "skipped":
+        return entry.skip_reason or "skipped by the pack"
+    return None
 
 
 def _unjudged(
@@ -198,13 +246,8 @@ async def _check_tool(
     checks = applicable_checks(claims)
     entry = pack.entries.get(tool.name)
     description = tool.description or ""
-    if not checks:
-        reason = "no explicit claim"
-    elif entry is None:
-        reason = "no pack entry yet"
-    elif entry.status == "skipped":
-        reason = entry.skip_reason or "skipped by the pack"
-    else:
+    reason = _skip_reason(entry, checks)
+    if reason is None and entry is not None:
         check = _ToolCheck(
             client, reader, pack, tool, entry, claims, checks, run_id, before_call,
             interval_s, timeout_s, secrets,

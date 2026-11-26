@@ -10,7 +10,7 @@ is withheld both public files also carry a "do not publish" banner (ruling R18).
 import dataclasses
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Literal
@@ -74,6 +74,10 @@ class RunHeader:
     tools_list: list[dict]
     tools_list_sha256: str
     standard_read_only_fields: list[str]
+    # From pack.validate_pack and pack.pack_warnings, run against tools/list before
+    # the first call. Any problem means no tool was called and no fixture created.
+    pack_problems: list[str] = field(default_factory=list)
+    pack_warnings: list[str] = field(default_factory=list)
 
 
 def jsonable(value: Any) -> Any:
@@ -146,6 +150,7 @@ def _markdown_report(header: RunHeader, public: list[ToolResult], withheld: int)
         lines += [f"> **{PUBLISH_BLOCKED}**", ""]
     lines += [STATEMENT, "", "## Run", ""]
     lines += _header_table(header)
+    lines += _validation_section(header)
     lines += ["", "## Coverage", "", "| Outcome | Tools |", "|---|---|"]
     lines += [f"| {name} | {count} |" for name, count in coverage(public).items()]
     if withheld:
@@ -209,6 +214,19 @@ def _header_table(h: RunHeader) -> list[str]:
     return ["| Field | Value |", "|---|---|"] + [
         f"| {name} | {_cell(value)} |" for name, value in rows
     ]
+
+
+def _validation_section(h: RunHeader) -> list[str]:
+    if not (h.pack_problems or h.pack_warnings):
+        return []
+    lines = ["", "## Pack validation", ""]
+    if h.pack_problems:
+        lines += ["Problems (the run stopped before any fixture or call):", ""]
+        lines += [f"- {_inline(p)}" for p in h.pack_problems] + [""]
+    if h.pack_warnings:
+        lines += ["Warnings (for a human reviewer; they do not stop the run):", ""]
+        lines += [f"- {_inline(w)}" for w in h.pack_warnings] + [""]
+    return lines[:-1]
 
 
 def _tool_section(r: ToolResult) -> list[str]:

@@ -5,12 +5,32 @@ import pytest
 
 from mcp_annotation_check.github.rest import GitHubRest
 from mcp_annotation_check.github.safety import SafetyRefusal, make_before_call, preflight
-from mcp_annotation_check.pack import Pack
+from mcp_annotation_check.pack import Pack, ToolEntry
 
 TOKEN = "github_pat_dummy0000000000000000"
 LOGIN = "test-account"
 ORG = "test-org"
 READ, WRITE = f"{ORG}/read-repo", f"{ORG}/write-repo"
+
+
+# Every tool the per-call tests call, with the role of each argument it may take.
+ROLES = {
+    "add_labels": {
+        "owner": "owner", "repo": "repository", "issue_number": "id",
+        "labels": "content", "body": "content", "state": "other",
+    },
+    "by_full_name": {"full_name": "full_name", "body": "content"},
+    "get_repository": {"repository_id": "repository_id"},
+    "search_issues": {"query": "other", "page": "other"},
+    "fork_repository": {"owner": "owner", "repo": "repository", "organization": "owner"},
+    "two_owners": {"owner": "owner", "org": "owner", "repo": "repository"},
+    "with_payload": {"owner": "owner", "repo": "repository", "payload": "content"},
+    "update_by_id": {
+        "owner": "owner", "repo": "repository", "repository_id": "repository_id",
+        "issue_number": "id", "gist_id": "id", "widget_id": "id", "repo_id": "id",
+        "pull_number": "other", "body": "content",
+    },
+}
 
 
 def pack(**overrides) -> Pack:
@@ -20,7 +40,7 @@ def pack(**overrides) -> Pack:
         allowlist=[ORG],
         repositories={"read": READ, "write": WRITE},
         standard_read_only_fields=[],
-        entries={},
+        entries={t: ToolEntry(tool=t, argument_roles=r) for t, r in ROLES.items()},
         id_only_write_tools=["update_by_id"],
     )
     values.update(overrides)
@@ -157,92 +177,324 @@ async def test_owner_comparison_is_case_insensitive():
     assert facts["login"] == LOGIN
 
 
-# --- per-call checks ---------------------------------------------------------
+# --- per-call checks: every argument has a declared role (spec Amendment 1) ------
+
+
+async def check(arguments: dict, tool: str = "add_labels", gh: "GitHub | None" = None, **kw):
+    gh = gh or GitHub()
+    await make_before_call(gh.rest, pack(**kw))(tool, arguments)
+    return gh
 
 
 @pytest.mark.parametrize(
-    "arguments",
+    "key",
+    ["newowner", "targetrepo", "forkorganization", "NEWOWNER", "ownér", "repository_slug",
+     "accountid", "targetnamespace", "userlogins", "org2", "Owner", "rеpo", "owner ",
+     "title", "report"],
+)
+@pytest.mark.parametrize("value", ["outside-org", "outside-org/x", ORG, WRITE, 5])
+async def test_argument_without_declared_role_refused(key, value):
+    # "rеpo" has a Cyrillic "е"; "owner " a trailing space: neither is the declared key.
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal, match="has no declared role"):
+        await check({"owner": ORG, "repo": "write-repo", key: value}, gh=gh)
+    assert gh.requests == []
+
+
+async def test_tool_without_an_enabled_pack_entry_refused():
+    skipped = {"add_labels": ToolEntry(tool="add_labels", status="skipped", skip_reason="x")}
+    for kw in ({}, {"entries": skipped}):
+        with pytest.raises(SafetyRefusal, match="no enabled pack entry"):
+            await check({"body": "x"}, tool="not_in_pack" if not kw else "add_labels", **kw)
+
+
+async def test_arguments_must_be_a_mapping():
+    with pytest.raises(SafetyRefusal, match="not a mapping"):
+        await check(["owner", ORG])
+
+
+@pytest.mark.parametrize(
+    ("arguments", "tool"),
     [
-        {"owner": "other-owner", "repo": "thing"},
-        {"owner": "other-owner"},
-        {"repo": "other-owner/thing"},
-        {"repository": "other-owner/thing"},
-        {"full_name": "other-owner/thing"},
-        {"owner": ORG, "repo": "other-owner/thing"},
-        {"nested": {"owner": "other-owner", "repo": "thing"}},
+        ({"owner": "other-owner", "repo": "thing"}, "add_labels"),
+        ({"owner": "other-owner"}, "add_labels"),
+        ({"owner": ORG, "repo": "write-repo", "organization": "other-owner"}, "fork_repository"),
+        ({"full_name": "other-owner/thing"}, "by_full_name"),
     ],
 )
-async def test_call_to_non_allowlisted_owner_refused(arguments):
-    gh = GitHub()
-    before_call = make_before_call(gh.rest, pack())
+async def test_owner_not_on_the_allowlist_refused(arguments, tool):
     with pytest.raises(SafetyRefusal, match="other-owner"):
-        await before_call("add_labels", arguments)
+        await check(arguments, tool)
+
+
+# U+017F LATIN SMALL LETTER LONG S casefolds to "s"; U+212A KELVIN SIGN lowers to "k".
+LONG_S_ORG = "teſt-org"
+KELVIN_ORG = "test-org-\u212a"
 
 
 @pytest.mark.parametrize(
     "arguments",
     [
-        {"owner": "Test-Org", "repo": "write-repo"},
-        {"repository": "TEST-ORG/write-repo"},
-        {"full_name": WRITE},
-        {"owner": ORG, "repository": "write-repo"},
+        {"owner": LONG_S_ORG, "repo": "write-repo"},
+        {"owner": LONG_S_ORG},
+        {"owner": "test org"},
+        {"owner": 42, "repo": "write-repo"},
+        {"owner": ["test-org"]},
+        {"owner": ORG, "repo": "wrіte-repo"},  # Cyrillic "і"
+        {"owner": ORG, "repo": "write repo"},
     ],
 )
-async def test_call_to_allowlisted_owner_allowed(arguments):
+async def test_non_ascii_or_malformed_owner_or_repository_value_refused(arguments):
     gh = GitHub()
-    await make_before_call(gh.rest, pack())("add_labels", arguments)
+    with pytest.raises(SafetyRefusal):
+        await check(arguments, gh=gh)
+    assert gh.requests == []
+
+
+async def test_kelvin_sign_owner_does_not_match_lowercased_allowlist():
+    with pytest.raises(SafetyRefusal):
+        await check({"owner": KELVIN_ORG}, allowlist=[ORG, "test-org-k"])
+
+
+async def test_non_ascii_allowlist_entry_never_matches():
+    with pytest.raises(SafetyRefusal):
+        await check({"owner": "test-org"}, allowlist=[LONG_S_ORG])
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"owner": ORG, "repo": "write-repo"},
+        {"owner": "Test-Org", "repo": "Write-Repo"},
+        {"owner": ORG, "repo": "read-repo", "issue_number": 7, "labels": ["a"], "state": "open"},
+        {"owner": ORG},
+        {"body": "plain text", "state": None},
+    ],
+)
+async def test_allowlisted_owner_and_pack_repository_allowed(arguments):
+    gh = await check(arguments)
     assert gh.requests == []
 
 
 @pytest.mark.parametrize(
-    "arguments",
+    ("arguments", "match"),
     [
-        {"repo": "write-repo"},
-        {"repository": "write-repo"},
-        {"owner": 42, "repo": "write-repo"},
-        {"full_name": "a/b/c"},
-        {"repository": "/write-repo"},
+        ({"repo": "write-repo"}, "exactly one owner"),
+        ({"owner": ORG, "repo": "other-repo"}, "not one of the pack's repositories"),
+        ({"owner": ORG, "repo": f"{ORG}/write-repo"}, "not a bare repository name"),
+        ({"owner": ORG, "repo": ".."}, "not a bare repository name"),
+        ({"owner": ORG, "repo": ""}, "not a bare repository name"),
     ],
 )
-async def test_unresolvable_repository_argument_refused(arguments):
+async def test_repository_pairs_with_one_owner_and_names_a_pack_repository(arguments, match):
+    with pytest.raises(SafetyRefusal, match=match):
+        await check(arguments)
+
+
+async def test_repository_with_two_owner_arguments_refused():
+    two = dict(allowlist=[ORG, "test-org-2"])
+    with pytest.raises(SafetyRefusal, match="exactly one owner"):
+        await check({"owner": ORG, "org": "test-org-2", "repo": "write-repo"}, "two_owners", **two)
+
+
+@pytest.mark.parametrize("value", [WRITE, "TEST-ORG/write-repo", READ])
+async def test_full_name_naming_a_pack_repository_allowed(value):
+    await check({"full_name": value}, "by_full_name")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [f"{ORG}/other", "write-repo", "a/b/c", "/write-repo", f"{LONG_S_ORG}/write-repo",
+     f"{ORG}/..", 5],
+)
+async def test_full_name_not_naming_a_pack_repository_refused(value):
+    with pytest.raises(SafetyRefusal):
+        await check({"full_name": value}, "by_full_name")
+
+
+async def test_repository_id_resolved_for_any_tool():
+    gh = GitHub({"/repositories/5": repo("outside-org/thing")})
+    with pytest.raises(SafetyRefusal, match="outside-org"):
+        await check({"repository_id": 5}, "get_repository", gh=gh)
+    gh = GitHub({"/repositories/5": repo(WRITE)})
+    await check({"repository_id": 5}, "get_repository", gh)
+    assert [r.url.path for r in gh.requests] == ["/repositories/5"]
+
+
+async def test_unresolvable_repository_id_refused():
+    gh = GitHub()  # a 404
+    with pytest.raises(SafetyRefusal, match="could not resolve"):
+        await check({"repository_id": 5}, "get_repository", gh=gh)
+
+
+@pytest.mark.parametrize("value", ["5/../x", True, {"id": 5}, "5 6"])
+async def test_repository_id_must_be_a_plain_id(value):
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal, match="not a plain ID"):
+        await check({"repository_id": value}, "get_repository", gh=gh)
+    assert gh.requests == []
+
+
+async def test_resolved_repository_owner_must_be_an_ascii_name():
+    gh = GitHub({"/repositories/5": repo(f"{LONG_S_ORG}/w")})
+    with pytest.raises(SafetyRefusal, match="not on the allowlist"):
+        await check({"repository_id": 5}, "get_repository", gh=gh)
+
+
+@pytest.mark.parametrize("value", ["7; rm", True, [7], {"n": 7}, 1.5])
+async def test_id_role_value_must_be_a_plain_id(value):
+    with pytest.raises(SafetyRefusal):
+        await check({"owner": ORG, "repo": "write-repo", "issue_number": value})
+
+
+async def test_content_rule_reapplied_to_rendered_arguments():
+    with pytest.raises(SafetyRefusal, match="@mention"):
+        await check({"owner": ORG, "repo": "write-repo", "body": "hello @someone"})
+
+
+@pytest.mark.parametrize("value", ["see a/b#1", "cc @someone", "https://github.com/x"])
+async def test_content_rule_applies_to_other_values(value):
+    with pytest.raises(SafetyRefusal):
+        await check({"query": value}, "search_issues")
+
+
+@pytest.mark.parametrize("value", [{"a": 1}, ["a"], [ORG]])
+async def test_nested_value_refused_unless_content(value):
+    with pytest.raises(SafetyRefusal, match="nested"):
+        await check({"query": value}, "search_issues")
+
+
+async def test_search_query_not_modified():
+    arguments = {"query": "repo:test-org/read-repo is:open label:bug sort:updated", "page": 2}
+    original = copy.deepcopy(arguments)
+    gh = await check(arguments, "search_issues")
+    assert arguments == original
+    assert gh.requests == []
+
+
+# --- inside content values, the nested key walk still applies (defence in depth) ---
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"owner": "outside-org", "repo": "thing"},
+        {"org": "outside-org"},
+        {"organization": "outside-org"},
+        {"username": "outside-org"},
+        {"Owner": "outside-org", "repo": "thing"},
+        {"ownerLogin": "outside-org"},
+        {"repo_owner": "outside-org"},
+        {"login": "outside-org"},
+        {"namespace": "outside-org"},
+        {"repoName": "outside-org/thing"},
+        {"nameWithOwner": "outside-org/thing"},
+        {"org": "outside-org", "repo_name": "thing"},
+        [{"Organization": "outside-org"}],
+        {"a": [{"b": {"owner": "outside-org"}}]},
+    ],
+)
+async def test_owner_inside_content_checked(payload):
+    with pytest.raises(SafetyRefusal, match="outside-org"):
+        await check({"owner": ORG, "repo": "write-repo", "payload": payload}, "with_payload")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"owner_type": "Organization"},
+        {"orgs": [ORG]},
+        {"user_id": 5},
+        {"organization": {"login": ORG}},
+        {"repositories": [WRITE]},
+        {"newowner": ORG},
+        {"tïtle": "x"},
+        {"repo": "write-repo"},
+        {"owner": ORG, "org": "test-org-2", "repo": "write-repo"},
+    ],
+)
+async def test_uninterpretable_key_inside_content_refused(payload):
     gh = GitHub()
     with pytest.raises(SafetyRefusal):
-        await make_before_call(gh.rest, pack())("add_labels", arguments)
+        await check(
+            {"owner": ORG, "repo": "write-repo", "payload": payload},
+            "with_payload",
+            gh=gh,
+            allowlist=[ORG, "test-org-2"],
+        )
+    assert gh.requests == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"Owner": ORG, "repoName": "write-repo"},
+        {"organization": "Test-Org"},
+        {"report": "weekly", "body": "text", "sort_order": "asc", "category": "x"},
+        ["a", "b"],
+        {"labels": ["x"], "text": "outside-org/thing"},
+    ],
+)
+async def test_harmless_content_allowed(payload):
+    gh = await check({"owner": ORG, "repo": "write-repo", "payload": payload}, "with_payload")
+    assert gh.requests == []
+
+
+async def test_repository_id_inside_content_resolved():
+    gh = GitHub({"/repositories/5": repo("outside-org/thing")})
+    with pytest.raises(SafetyRefusal, match="outside-org"):
+        await check(
+            {"owner": ORG, "repo": "write-repo", "payload": {"repo_id": 5}}, "with_payload", gh=gh
+        )
+
+
+# --- ID-only write tools: id-role arguments are resolved through REST ---------------
 
 
 async def test_id_only_write_unresolvable_refused():
     gh = GitHub()  # GET /repositories/123 is a 404
-    before_call = make_before_call(gh.rest, pack())
     with pytest.raises(SafetyRefusal, match="update_by_id"):
-        await before_call("update_by_id", {"repository_id": 123})
+        await check({"repository_id": 123}, "update_by_id", gh=gh)
     assert [r.url.path for r in gh.requests] == ["/repositories/123"]
     assert gh.methods == {"GET"}
 
 
 async def test_id_only_write_resolved_to_allowlisted_owner_allowed():
     gh = GitHub({"/repositories/123": {"full_name": WRITE, "owner": {"login": ORG}}})
-    await make_before_call(gh.rest, pack())("update_by_id", {"repository_id": 123})
+    await check({"repository_id": 123}, "update_by_id", gh=gh)
 
 
 async def test_id_only_write_resolved_to_other_owner_refused():
     gh = GitHub({"/repositories/123": repo("other-owner/thing")})
     with pytest.raises(SafetyRefusal, match="other-owner"):
-        await make_before_call(gh.rest, pack())("update_by_id", {"repository_id": 123})
+        await check({"repository_id": 123}, "update_by_id", gh=gh)
+
+
+async def test_id_only_repo_id_declared_id_is_resolved_too():
+    gh = GitHub({"/repositories/9": repo("other-owner/thing")})
+    with pytest.raises(SafetyRefusal, match="other-owner"):
+        await check({"repo_id": 9}, "update_by_id", gh=gh)
+
+
+async def test_id_only_global_id_resolved():
+    gh = GitHub({"/gists/abc": {"owner": {"login": "other-owner"}}})
+    with pytest.raises(SafetyRefusal, match="other-owner"):
+        await check({"gist_id": "abc"}, "update_by_id", gh=gh)
+    gh = GitHub({"/gists/abc": {"owner": {"login": ORG}}})
+    await check({"gist_id": "abc"}, "update_by_id", gh)
 
 
 async def test_id_only_issue_number_without_repository_refused():
     gh = GitHub()
     with pytest.raises(SafetyRefusal, match="repository"):
-        await make_before_call(gh.rest, pack())("update_by_id", {"issue_number": 7})
+        await check({"issue_number": 7}, "update_by_id", gh=gh)
     assert gh.requests == []
 
 
 async def test_id_only_issue_number_resolved_within_repository():
     issue = {"repository_url": f"https://api.github.com/repos/{WRITE}"}
     gh = GitHub({f"/repos/{WRITE}/issues/7": issue})
-    await make_before_call(gh.rest, pack())(
-        "update_by_id", {"owner": ORG, "repo": "write-repo", "issue_number": 7}
-    )
+    await check({"owner": ORG, "repo": "write-repo", "issue_number": 7}, "update_by_id", gh=gh)
     assert [r.url.path for r in gh.requests] == [f"/repos/{WRITE}/issues/7"]
 
 
@@ -252,217 +504,31 @@ async def test_id_only_issue_that_moved_refused():
     moved = (301, {"message": "Moved Permanently", "url": moved_to})
     gh = GitHub({f"/repos/{WRITE}/issues/7": moved})
     with pytest.raises(SafetyRefusal):
-        await make_before_call(gh.rest, pack())(
-            "update_by_id", {"owner": ORG, "repo": "write-repo", "issue_number": 7}
-        )
+        await check({"owner": ORG, "repo": "write-repo", "issue_number": 7}, "update_by_id", gh=gh)
 
 
 async def test_id_only_unknown_id_kind_refused():
-    gh = GitHub()
     with pytest.raises(SafetyRefusal, match="widget_id"):
-        await make_before_call(gh.rest, pack())(
-            "update_by_id", {"owner": ORG, "repo": "write-repo", "widget_id": 5}
-        )
+        await check({"owner": ORG, "repo": "write-repo", "widget_id": 5}, "update_by_id")
 
 
 async def test_id_only_without_any_id_refused():
+    with pytest.raises(SafetyRefusal, match="no ID argument"):
+        await check({"owner": ORG, "repo": "write-repo", "body": "x"}, "update_by_id")
+
+
+async def test_id_only_id_declared_otherwise_refused():
     gh = GitHub()
-    with pytest.raises(SafetyRefusal):
-        await make_before_call(gh.rest, pack())(
-            "update_by_id", {"owner": ORG, "repo": "write-repo"}
+    with pytest.raises(SafetyRefusal, match="pull_number"):
+        await check(
+            {"owner": ORG, "repo": "write-repo", "issue_number": 7, "pull_number": 3},
+            "update_by_id",
+            gh=gh,
         )
-
-
-async def test_content_rule_reapplied_to_rendered_arguments():
-    gh = GitHub()
-    with pytest.raises(SafetyRefusal, match="@mention"):
-        await make_before_call(gh.rest, pack())(
-            "add_comment", {"owner": ORG, "repo": "write-repo", "body": "hello @someone"}
-        )
-
-
-async def test_search_query_not_modified():
-    gh = GitHub()
-    arguments = {"query": "repo:test-org/read-repo is:open label:bug sort:updated"}
-    original = copy.deepcopy(arguments)
-    await make_before_call(gh.rest, pack())("search_issues", arguments)
-    assert arguments == original
     assert gh.requests == []
 
 
-# --- owner-naming arguments beyond the four basic keys (ruling R14) -------------
-
-
-async def test_fork_into_outside_organization_refused():
-    gh = GitHub()
-    with pytest.raises(SafetyRefusal, match="outside-org"):
-        await make_before_call(gh.rest, pack())(
-            "fork_repository", {"owner": ORG, "repo": "write-repo", "organization": "outside-org"}
-        )
-
-
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        {"org": "outside-org"},
-        {"organization": "outside-org"},
-        {"user": "outside-org"},
-        {"username": "outside-org"},
-        {"Owner": "outside-org", "repo": "thing"},
-        {"owner_login": "outside-org"},
-        {"ownerLogin": "outside-org"},
-        {"repo_owner": "outside-org"},
-        {"owner": ORG, "repo_name": "outside-org/thing"},
-        {"repoName": "outside-org/thing"},
-        {"repository_name": "outside-org/thing"},
-        {"repositoryFullName": "outside-org/thing"},
-        {"nameWithOwner": "outside-org/thing"},
-        {"org": "outside-org", "repo_name": "thing"},
-        {"nested": [{"Organization": "outside-org"}]},
-    ],
-)
-async def test_owner_key_variants_checked(arguments):
-    gh = GitHub()
-    with pytest.raises(SafetyRefusal, match="outside-org"):
-        await make_before_call(gh.rest, pack())("some_tool", arguments)
-
-
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        {"Owner": ORG, "repoName": "write-repo"},
-        {"organization": "Test-Org"},
-        {"owner_login": ORG, "repository_name": "write-repo"},
-        {"username": ORG},
-        {"login": ORG},
-        {"namespace": "Test-Org"},
-        {"account": ORG},
-        {"report": "weekly", "body": "text", "sort_order": "asc", "category": "x"},
-    ],
-)
-async def test_owner_key_variants_allowed(arguments):
-    gh = GitHub()
-    await make_before_call(gh.rest, pack())("some_tool", arguments)
-    assert gh.requests == []
-
-
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        {"owner_type": "Organization"},
-        {"orgs": [ORG]},
-        {"user_id": 5},
-        {"organization": {"login": ORG}},
-        {"repositories": [WRITE]},
-    ],
-)
-async def test_uninterpretable_owner_or_repository_argument_refused(arguments):
-    gh = GitHub()
-    with pytest.raises(SafetyRefusal):
-        await make_before_call(gh.rest, pack())("some_tool", arguments)
-    assert gh.requests == []
-
-
-async def test_bare_repository_with_two_owners_refused():
-    gh = GitHub()
-    two = pack(allowlist=[ORG, "test-org-2"])
-    with pytest.raises(SafetyRefusal, match="ambiguous"):
-        await make_before_call(gh.rest, two)(
-            "some_tool", {"owner": ORG, "org": "test-org-2", "repo": "write-repo"}
-        )
-
-
-async def test_repository_id_resolved_for_any_tool():
-    gh = GitHub({"/repositories/5": repo("outside-org/thing")})
-    with pytest.raises(SafetyRefusal, match="outside-org"):
-        await make_before_call(gh.rest, pack())("get_repository", {"repository_id": 5})
-    gh = GitHub({"/repositories/5": repo(WRITE)})
-    await make_before_call(gh.rest, pack())("get_repository", {"repoId": 5})
-    assert [r.url.path for r in gh.requests] == ["/repositories/5"]
-
-
-# --- keys that join an owner or repository word without a separator (fix round 2) ---
-
-
-@pytest.mark.parametrize(
-    "key",
-    ["newowner", "targetrepo", "forkorganization", "NEWOWNER", "ownér", "repository_slug",
-     "accountid", "targetnamespace", "userlogins", "org2"],
-)
-@pytest.mark.parametrize("value", ["outside-org", "outside-org/x", ORG, WRITE])
-async def test_unrecognised_owner_like_key_refused(key, value):
-    gh = GitHub()
-    with pytest.raises(SafetyRefusal, match="cannot interpret|non-ASCII"):
-        await make_before_call(gh.rest, pack())("some_tool", {key: value})
-    assert gh.requests == []
-
-
-@pytest.mark.parametrize("key", ["login", "namespace", "account", "Login", "NAMESPACE"])
-async def test_login_namespace_account_are_owner_keys(key):
-    gh = GitHub()
-    with pytest.raises(SafetyRefusal, match="outside-org"):
-        await make_before_call(gh.rest, pack())("some_tool", {key: "outside-org"})
-
-
-@pytest.mark.parametrize("key", ["report", "reports", "reporter"])
-async def test_known_harmless_keys_allowed(key):
-    gh = GitHub()
-    await make_before_call(gh.rest, pack())("some_tool", {key: "outside-org/thing"})
-    assert gh.requests == []
-
-
-async def test_non_ascii_key_refused_even_without_an_owner_word():
-    gh = GitHub()
-    with pytest.raises(SafetyRefusal, match="non-ASCII"):
-        await make_before_call(gh.rest, pack())("some_tool", {"tïtle": "x"})
-
-
-# --- owners must be ASCII names, compared with .lower() (final fix wave) -------------
-
-# U+017F LATIN SMALL LETTER LONG S casefolds to "s"; U+212A KELVIN SIGN lowers to "k".
-LONG_S_ORG = "teſt-org"
-KELVIN_ORG = "test-org-K"
-
-
-@pytest.mark.parametrize(
-    "arguments",
-    [
-        {"owner": LONG_S_ORG, "repo": "w"},
-        {"owner": LONG_S_ORG},
-        {"repo": f"{LONG_S_ORG}/w"},
-        {"full_name": f"{LONG_S_ORG}/w"},
-        {"owner": LONG_S_ORG, "repository": "write-repo"},
-        {"nested": {"org": LONG_S_ORG}},
-        {"owner": "test org"},
-        {"repo": "test org/w"},
-    ],
-)
-async def test_non_ascii_or_malformed_owner_value_refused(arguments):
-    gh = GitHub()
-    with pytest.raises(SafetyRefusal):
-        await make_before_call(gh.rest, pack())("add_labels", arguments)
-    assert gh.requests == []
-
-
-async def test_kelvin_sign_owner_does_not_match_lowercased_allowlist():
-    gh = GitHub()
-    allow = pack(allowlist=[ORG, "test-org-k"])
-    with pytest.raises(SafetyRefusal):
-        await make_before_call(gh.rest, allow)("add_labels", {"owner": KELVIN_ORG})
-
-
-async def test_non_ascii_allowlist_entry_never_matches():
-    gh = GitHub()
-    with pytest.raises(SafetyRefusal):
-        await make_before_call(gh.rest, pack(allowlist=[LONG_S_ORG]))(
-            "add_labels", {"owner": "test-org"}
-        )
-
-
-async def test_resolved_repository_owner_must_be_an_ascii_name():
-    gh = GitHub({"/repositories/5": repo(f"{LONG_S_ORG}/w")})
-    with pytest.raises(SafetyRefusal, match="not on the allowlist"):
-        await make_before_call(gh.rest, pack())("get_repository", {"repository_id": 5})
+# --- preflight: owners must be ASCII names, compared with .lower() ------------------
 
 
 async def test_preflight_refuses_non_ascii_owner_that_casefolds_to_the_allowlist():

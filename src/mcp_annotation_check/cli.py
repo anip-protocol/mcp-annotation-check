@@ -20,7 +20,13 @@ from mcp_annotation_check.github.rest import GitHubRest
 from mcp_annotation_check.github.safety import make_before_call, preflight
 from mcp_annotation_check.pack import load_pack
 from mcp_annotation_check.redact import redact
-from mcp_annotation_check.report import PUBLISH_BLOCKED, WITHHELD, ToolResult, write_reports
+from mcp_annotation_check.report import (
+    PUBLISH_BLOCKED,
+    WITHHELD,
+    RunHeader,
+    ToolResult,
+    write_reports,
+)
 from mcp_annotation_check.runner import list_all_tools, run
 
 FAKE_PACK = Path(__file__).resolve().parents[2] / "packs" / "fake.yaml"
@@ -30,7 +36,7 @@ FAKE_PACK = Path(__file__).resolve().parents[2] / "packs" / "fake.yaml"
 _SERVER_LOGGER = "mcp.server.mcpserver.server"
 
 
-async def _self_test(out: Path) -> list[ToolResult]:
+async def _self_test(out: Path) -> tuple[RunHeader, list[ToolResult]]:
     store = FakeStore()
     context = {
         "image": None,
@@ -49,7 +55,13 @@ async def _self_test(out: Path) -> list[ToolResult]:
             settle_timeout_s=0.5,
         )
     write_reports(header, results, out)
-    return results
+    return header, results
+
+
+def _validation(header: RunHeader) -> list[str]:
+    """The pack validation problems and warnings, for stderr (they are in the reports too)."""
+    lines = [f"pack validation problem: {p}" for p in header.pack_problems]
+    return lines + list(header.pack_warnings)  # each warning starts "warning: "
 
 
 def _summary(results: list[ToolResult]) -> list[str]:
@@ -103,7 +115,9 @@ def _fail(error: BaseException, token: str | None) -> int:
     return 1
 
 
-async def _run_github(args: argparse.Namespace, token: str) -> list[ToolResult]:
+async def _run_github(
+    args: argparse.Namespace, token: str
+) -> tuple[RunHeader, list[ToolResult]]:
     pack = load_pack(args.pack)
     rest = GitHubRest(token)
     try:
@@ -131,7 +145,7 @@ async def _run_github(args: argparse.Namespace, token: str) -> list[ToolResult]:
                 secrets=[token],
             )
         write_reports(header, results, args.out)
-        return results
+        return header, results
     finally:
         await rest.aclose()
 
@@ -190,12 +204,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 count = asyncio.run(_list_tools(args))
                 print(f"{count} tools written to {args.out}")
                 return 0
-            results = asyncio.run(_run_github(args, token))
+            header, results = asyncio.run(_run_github(args, token))
         except KeyboardInterrupt:
             print("interrupted", file=sys.stderr)
             return 130
         except BaseException as error:  # noqa: BLE001 - everything is redacted, never a traceback
             return _fail(error, token)
+        for line in _validation(header):
+            print(redact(line, [token] if token else []), file=sys.stderr)
         for name in ("report.md", "report.json", "private-findings.md"):
             print(args.out / name)
         print("outcomes:")
@@ -207,9 +223,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         previous = server_logger.disabled
         server_logger.disabled = True
         try:
-            results = asyncio.run(_self_test(args.out))
+            header, results = asyncio.run(_self_test(args.out))
         finally:
             server_logger.disabled = previous
+        for line in _validation(header):
+            print(line, file=sys.stderr)
         for name in ("report.md", "report.json", "private-findings.md"):
             print(args.out / name)
         print("outcomes:")

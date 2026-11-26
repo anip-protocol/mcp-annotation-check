@@ -22,7 +22,8 @@ The harness calls tools that can write. The token is the boundary: a fine-graine
 
 - The token is read from the environment variable `MCP_ANNOTATION_CHECK_GITHUB_TOKEN`. The harness never logs, prints or writes it to a report; error text passes through a redactor before it reaches a report or the console, so that protection is only as strong as the redactor.
 - Preflight, before any tool runs, using GET requests only: the token must be fine-grained; `GET /user` must be the expected test account (`--login`); every repository the token lists must belong to the pack's allowlist and every pack repository must be listed; and the account must belong to no organization outside the allowlist and own no repository outside it. The last check may pass vacuously if GitHub filters those endpoints by token; see [docs/verification.md](docs/verification.md).
-- Per-call checks, before every tool call: the rendered arguments are re-checked against the pack's content rule, every owner and repository named at any depth must be allowlisted, and arguments the harness cannot interpret are refused. Tools that take only IDs have the IDs resolved to an owner first.
+- Before the first call, the pack is validated against the server's `tools/list` (see [Pack format](#pack-format)). Any problem stops the run before a fixture is created or a tool is called.
+- Per-call checks, before every tool call: the rendered arguments are re-checked against the pack's content rule; every argument must have a role declared in the pack, and one without is refused; each value is checked by its role (owners must be allowlisted, repositories must be the pack's own, repository IDs are resolved to their owner through REST). Inside free-form `content` values, keys that look like owners or repositories are still checked, as defence in depth. Tools that take only IDs have the IDs resolved to an owner first.
 - A safety refusal stops the whole run. Arguments are never rewritten.
 - Checks run one at a time. The harness never posts, comments or publishes anywhere.
 
@@ -80,6 +81,36 @@ mcp-annotation-check run --pack packs/github.yaml \
 ```
 
 After each call the harness polls until the observed state stops changing. `--settle-interval` and `--settle-timeout` control that polling.
+
+## Pack format
+
+A pack is a YAML file describing one server's tools; the full key list is in the docstring of `src/mcp_annotation_check/pack.py`, and `packs/fake.yaml` is a small example. Each enabled tool entry declares the role of every argument in the tool's input schema under `argument_roles`:
+
+| Role | Meaning | Value in the pack |
+|---|---|---|
+| `owner` | an owner login | exactly `{repo.owner}` |
+| `repository` | a bare repository name, paired with the call's one `owner` argument | exactly `{repo.name}` |
+| `full_name` | `owner/name` | exactly `{repo.owner}/{repo.name}` |
+| `repository_id` | a numeric repository ID, resolved to its owner through REST | any plain ID |
+| `id` | any other ID (issue number, comment ID, ...) | any plain ID |
+| `content` | free text or structured data; the only role that may hold a mapping or list | anything the content rule allows |
+| `other` | any other scalar (state, sort order, a search query, ...) | a scalar |
+
+```yaml
+tools:
+  add_issue_labels:
+    fixture: issue_with_labels
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      issue_number: "{fixture.issue_number}"
+      labels: [a]
+    argument_roles: {owner: owner, repo: repository, issue_number: id, labels: content}
+```
+
+If a tool's repository argument takes `owner/name`, declare it `full_name`. Skipped entries need no roles.
+
+Before the first call, the harness checks the pack against the server's `tools/list`: every enabled tool exists, every input-schema property has a role, every role names a real property, and owner and repository values are the placeholders above. Problems are listed under "Pack validation" in the report header (`pack_problems` in `report.json`) and on stderr; every enabled tool is then SKIPPED with "pack validation failed: <n> problem(s)". Warnings do not stop the run: a property whose name looks like an owner or repository (such as `target_owner` or `org`) but is declared `content`, `other` or `id` is listed as a warning (`pack_warnings`) for a human to check.
 
 ## How to read a report
 

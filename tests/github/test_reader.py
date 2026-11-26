@@ -241,6 +241,7 @@ async def test_rest_error_mid_fixture_is_reported_and_cleanup_attempted():
                 tool="add_labels",
                 fixture="issue_with_labels",
                 arguments={"issue_id": "{fixture.issue_number}", "labels": ["x"]},
+                argument_roles={"issue_id": "id", "labels": "content"},
             )
         },
     )

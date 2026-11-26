@@ -14,12 +14,30 @@ Top-level keys:
       status           "enabled" (default) or "skipped" (needs skip_reason)
       skip_reason, fixture, repository ("write" default | "read")
       arguments        dict; strings may hold {fixture.X}, {repo.owner}, {repo.name}
+      argument_roles   map argument name -> role, one of ROLES (see below)
       fields           list of {path, kind} (kind: collection | scalar)
       supplies         map field path -> argument name supplying that field
       custom_setup, custom_verdict, custom_reason (verdict needs reason)
 
 Content rule: no string in arguments may contain an @mention, a
 cross-repository reference or a github.com URL.
+
+Argument roles (spec Amendment 1). An enabled entry declares the role of every
+argument in the tool's input schema; skipped entries need none:
+  owner          an owner login; its value must be exactly "{repo.owner}"
+  repository     a bare repository name; exactly "{repo.name}", and the call must
+                 have exactly one owner argument to pair it with
+  full_name      "owner/name"; exactly "{repo.owner}/{repo.name}"
+  repository_id  a numeric repository ID, resolved to its owner through REST
+  id             any other ID (issue number, comment ID, ...)
+  content        free text or structured data; the only role whose value may be
+                 a mapping or a list
+  other          any other scalar (state, sort order, a search query, ...)
+At load time every argument of an enabled entry must have a role, and owner and
+repository values must be those placeholders, so they render to the pack's own
+repositories by construction. `validate_pack` then checks the pack against the
+server's tools/list before the first call; `pack_warnings` lists properties whose
+names look like owners or repositories but are declared content, other or id.
 """
 
 import re
@@ -28,8 +46,19 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from mcp.types import Tool
 
+from mcp_annotation_check.argnames import looks_like_id, may_name_owner_or_repository
 from mcp_annotation_check.snapshot import FieldKind, FieldSpec
+
+ROLES = frozenset({"owner", "repository", "full_name", "repository_id", "id", "content", "other"})
+# The only value each of these roles may have in a pack.
+_PLACEHOLDER_ROLES = {
+    "owner": "{repo.owner}",
+    "repository": "{repo.name}",
+    "full_name": "{repo.owner}/{repo.name}",
+}
+_NESTED = (dict, list, tuple, set, frozenset)
 
 _MENTION = re.compile(r"(?<![\w.])@[A-Za-z0-9-]+")
 _XREF = re.compile(r"[\w.-]+/[\w.-]+#\d+")
@@ -55,6 +84,7 @@ class ToolEntry:
     custom_verdict: str | None = None
     custom_reason: str | None = None
     repository: Literal["read", "write"] = "write"
+    argument_roles: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -123,7 +153,7 @@ def _entry(tool: str, raw: dict[str, Any]) -> ToolEntry:
         if arg not in arguments:
             raise PackError(f"{tool}: supplies value {arg!r} is not an argument name")
     check_content(arguments, tool)
-    return ToolEntry(
+    entry = ToolEntry(
         tool=tool,
         status=status,
         skip_reason=raw.get("skip_reason"),
@@ -135,7 +165,132 @@ def _entry(tool: str, raw: dict[str, Any]) -> ToolEntry:
         custom_verdict=raw.get("custom_verdict"),
         custom_reason=raw.get("custom_reason"),
         repository=repository,
+        argument_roles=_argument_roles(raw.get("argument_roles"), tool),
     )
+    problems = _role_problems(entry)
+    if problems:
+        raise PackError("; ".join(problems))
+    return entry
+
+
+def _argument_roles(raw: Any, tool: str) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise PackError(f"{tool}: argument_roles must map argument names to roles")
+    for name, role in raw.items():
+        if not isinstance(name, str) or not isinstance(role, str):
+            raise PackError(f"{tool}: argument_roles entry {name!r}: {role!r} is not name: role")
+    return dict(raw)
+
+
+def _role_problems(entry: ToolEntry) -> list[str]:
+    """What is wrong with an entry's roles, on their own (no tools/list needed)."""
+    tool, roles = entry.tool, entry.argument_roles
+    problems = [
+        f"{tool}: argument {name!r} has unknown role {role!r} (roles: {', '.join(sorted(ROLES))})"
+        for name, role in roles.items()
+        if role not in ROLES
+    ]
+    if entry.status != "enabled":
+        return problems
+    owners = repositories = 0
+    for name, value in entry.arguments.items():
+        role = roles.get(name)
+        if role is None:
+            problems.append(f"{tool}: argument {name!r} has no declared role")
+            continue
+        owners += role == "owner"
+        repositories += role == "repository"
+        expected = _PLACEHOLDER_ROLES.get(role)
+        if expected is not None and value != expected:
+            problems.append(
+                f"{tool}: {role} argument {name!r} must be exactly {expected!r}, not {value!r}"
+            )
+        elif role != "content" and isinstance(value, _NESTED):
+            problems.append(
+                f"{tool}: argument {name!r} has a nested value; only content arguments may"
+            )
+    if repositories and owners != 1:
+        problems.append(
+            f"{tool}: a repository argument needs exactly one owner argument to pair with, "
+            f"and the entry has {owners}"
+        )
+    return problems
+
+
+def _schema_properties(tool: Tool) -> dict[str, Any] | None:
+    schema = tool.input_schema
+    if not isinstance(schema, dict):
+        return None
+    properties = schema.get("properties", {})
+    return properties if isinstance(properties, dict) else None
+
+
+def validate_pack(pack: Pack, tools: list[Tool]) -> list[str]:
+    """Problems with the pack against the server's tools/list; empty means valid.
+
+    Checked for every enabled entry (skipped entries are not validated): its role
+    rules (as at load time, so entries built in code are covered too), that the tool
+    is listed, that every input-schema property has a declared role and every role
+    names a property, and, for ID-only write tools, that nothing that looks like an
+    ID is declared anything but `id` or `repository_id`. Warnings are separate: see
+    `pack_warnings`.
+    """
+    listed = {t.name: t for t in tools}
+    id_only = set(pack.id_only_write_tools)
+    problems: list[str] = []
+    for name, entry in pack.entries.items():
+        if entry.status != "enabled":
+            continue
+        problems += _role_problems(entry)
+        if name not in listed:
+            problems.append(f"{name}: not in the server's tools/list")
+            continue
+        properties = _schema_properties(listed[name])
+        if properties is None:
+            problems.append(f"{name}: the input schema's properties are not a mapping")
+            continue
+        roles = entry.argument_roles
+        problems += [
+            f"{name}: input-schema property {p!r} has no declared role"
+            for p in properties
+            if p not in roles
+        ]
+        problems += [
+            f"{name}: role declared for {r!r}, which is not an input-schema property"
+            for r in roles
+            if r not in properties
+        ]
+        if name in id_only:
+            problems += [
+                f"{name}: {p!r} looks like an ID of an ID-only write tool but is declared "
+                f"{roles[p]!r}"
+                for p in properties
+                if p in roles and roles[p] not in ("id", "repository_id") and looks_like_id(p)
+            ]
+    return problems
+
+
+def pack_warnings(pack: Pack) -> list[str]:
+    """Warnings for a human reviewer, each starting "warning: "; never problems.
+
+    A declared property whose name looks like it may name an owner or repository
+    (the name stems the safety checks used before roles) but whose role is
+    `content`, `other` or `id` is listed, so a mis-declared owner is seen. Once
+    `validate_pack` passes, the declared roles cover every input-schema property.
+    """
+    warnings: list[str] = []
+    for name, entry in pack.entries.items():
+        if entry.status != "enabled":
+            continue
+        for prop, role in entry.argument_roles.items():
+            if role in ("content", "other", "id") and may_name_owner_or_repository(prop):
+                warnings.append(
+                    f"warning: {name}: property {prop!r} may name an owner or repository "
+                    f"but is declared {role!r}; check it by hand"
+                )
+    return warnings
 
 
 def _allowlist(raw: Any) -> list[str]:

@@ -1,12 +1,18 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from mcp.types import Tool
 
 from mcp_annotation_check.pack import (
+    ROLES,
     PackError,
+    ToolEntry,
     load_pack,
+    pack_warnings,
     render_arguments,
     supplied_values,
+    validate_pack,
 )
 from mcp_annotation_check.snapshot import FieldKind, FieldSpec
 
@@ -35,6 +41,7 @@ def test_loads_entry_with_fields_and_supplies(tmp_path):
   add_labels:
     fixture: issue
     arguments: {labels: [a, b], issue_number: "{fixture.issue_number}"}
+    argument_roles: {labels: content, issue_number: id}
     fields:
       - {path: labels, kind: collection}
     supplies: {labels: labels}
@@ -49,6 +56,7 @@ def test_loads_entry_with_fields_and_supplies(tmp_path):
     assert e.repository == "write"
     assert e.fields == [FieldSpec("labels", FieldKind.COLLECTION)]
     assert e.supplies == {"labels": "labels"}
+    assert e.argument_roles == {"labels": "content", "issue_number": "id"}
 
 
 def test_skipped_without_reason_rejected(tmp_path):
@@ -92,22 +100,24 @@ def test_github_url_rejected(tmp_path):
 
 
 def test_email_address_is_not_a_mention(tmp_path):
-    p = write_pack(tmp_path, '  t1:\n    arguments: {body: "a@b.com"}\n')
+    p = write_pack(
+        tmp_path, '  t1:\n    arguments: {body: "a@b.com"}\n    argument_roles: {body: content}\n'
+    )
     assert load_pack(p).entries["t1"].arguments == {"body": "a@b.com"}
 
 
 def test_supplies_must_reference_field_and_argument(tmp_path):
     p = write_pack(
         tmp_path,
-        "  t1:\n    arguments: {labels: [a]}\n    fields: [{path: labels, kind: collection}]\n"
-        "    supplies: {other: labels}\n",
+        "  t1:\n    arguments: {labels: [a]}\n    argument_roles: {labels: content}\n"
+        "    fields: [{path: labels, kind: collection}]\n    supplies: {other: labels}\n",
     )
     with pytest.raises(PackError, match="t1"):
         load_pack(p)
     p = write_pack(
         tmp_path,
-        "  t1:\n    arguments: {labels: [a]}\n    fields: [{path: labels, kind: collection}]\n"
-        "    supplies: {labels: nope}\n",
+        "  t1:\n    arguments: {labels: [a]}\n    argument_roles: {labels: content}\n"
+        "    fields: [{path: labels, kind: collection}]\n    supplies: {labels: nope}\n",
     )
     with pytest.raises(PackError, match="t1"):
         load_pack(p)
@@ -129,7 +139,8 @@ def test_render_arguments_substitutes_fixture_values(tmp_path):
         tmp_path,
         '  t1:\n    arguments:\n      issue_number: "{fixture.issue_number}"\n'
         '      owner: "{repo.owner}"\n      title: "x {fixture.issue_number} in {repo.name}"\n'
-        '      nested: [{n: "{repo.name}"}]\n',
+        '      nested: [{n: "{repo.name}"}]\n'
+        "    argument_roles: {issue_number: id, owner: owner, title: content, nested: content}\n",
     )
     e = load_pack(p).entries["t1"]
     out = render_arguments(e, {"issue_number": 7}, {"write": "octo/write-repo"})
@@ -145,6 +156,7 @@ def test_supplied_values_makes_frozenset_for_collections(tmp_path):
     p = write_pack(
         tmp_path,
         "  t1:\n    arguments: {labels: [a, b], title: T}\n"
+        "    argument_roles: {labels: content, title: content}\n"
         "    fields: [{path: labels, kind: collection}, {path: title, kind: scalar}]\n"
         "    supplies: {labels: labels, title: title}\n",
     )
@@ -223,3 +235,227 @@ def test_valid_allowlist_and_repositories_load(tmp_path):
     pack = load_pack(p)
     assert pack.allowlist == ["test-org", "Test.Account_2"]
     assert pack.repositories == {"write": "test-org/w", "read": "test-org/r"}
+
+
+# --- argument roles (spec Amendment 1) ----------------------------------------
+
+
+def test_roles_are_the_declared_set():
+    assert ROLES == frozenset(
+        {"owner", "repository", "full_name", "repository_id", "id", "content", "other"}
+    )
+
+
+def test_unknown_role_rejected(tmp_path):
+    p = write_pack(tmp_path, "  t1:\n    arguments: {body: x}\n    argument_roles: {body: text}\n")
+    with pytest.raises(PackError, match="t1: argument 'body' has unknown role 'text'"):
+        load_pack(p)
+
+
+def test_argument_without_role_rejected(tmp_path):
+    p = write_pack(
+        tmp_path,
+        "  t1:\n    arguments: {body: x, title: y}\n    argument_roles: {body: content}\n",
+    )
+    with pytest.raises(PackError, match="t1: argument 'title' has no declared role"):
+        load_pack(p)
+
+
+def test_argument_roles_must_map_names_to_roles(tmp_path):
+    for roles in ("[body]", "content", "{body: [content]}"):
+        p = write_pack(
+            tmp_path, f"  t1:\n    arguments: {{body: x}}\n    argument_roles: {roles}\n"
+        )
+        with pytest.raises(PackError, match="t1"):
+            load_pack(p)
+
+
+def test_skipped_entry_needs_no_roles(tmp_path):
+    p = write_pack(
+        tmp_path, "  t1:\n    status: skipped\n    skip_reason: later\n    arguments: {body: x}\n"
+    )
+    assert load_pack(p).entries["t1"].argument_roles == {}
+
+
+@pytest.mark.parametrize(
+    ("role", "value"),
+    [
+        ("owner", "octo"),
+        ("owner", "{repo.name}"),
+        ("owner", "x{repo.owner}"),
+        ("owner", "{fixture.owner}"),
+        ("owner", 5),
+        ("repository", "write-repo"),
+        ("repository", "{repo.owner}/{repo.name}"),
+        ("repository", "{fixture.repository}"),
+        ("full_name", "octo/write-repo"),
+        ("full_name", "{repo.owner}/write-repo"),
+        ("full_name", "{fixture.repository}"),
+    ],
+)
+def test_hard_coded_owner_refused(tmp_path, role, value):
+    v = value if isinstance(value, int) else f'"{value}"'
+    p = write_pack(
+        tmp_path,
+        f'  t1:\n    arguments: {{owner: "{{repo.owner}}", x: {v}}}\n'
+        f"    argument_roles: {{owner: owner, x: {role}}}\n",
+    )
+    with pytest.raises(PackError, match=f"t1: {role} argument 'x' must be exactly"):
+        load_pack(p)
+
+
+def test_placeholder_owner_and_repository_load(tmp_path):
+    p = write_pack(
+        tmp_path,
+        '  t1:\n    arguments: {owner: "{repo.owner}", repo: "{repo.name}"}\n'
+        "    argument_roles: {owner: owner, repo: repository}\n"
+        '  t2:\n    arguments: {full: "{repo.owner}/{repo.name}"}\n'
+        "    argument_roles: {full: full_name}\n",
+    )
+    pack = load_pack(p)
+    out = render_arguments(pack.entries["t1"], {}, pack.repositories)
+    assert out == {"owner": "octo", "repo": "write-repo"}
+    assert render_arguments(pack.entries["t2"], {}, pack.repositories) == {
+        "full": "octo/write-repo"
+    }
+
+
+@pytest.mark.parametrize(
+    ("arguments", "roles"),
+    [
+        ('{repo: "{repo.name}"}', "{repo: repository}"),
+        (
+            '{owner: "{repo.owner}", org: "{repo.owner}", repo: "{repo.name}"}',
+            "{owner: owner, org: owner, repo: repository}",
+        ),
+    ],
+)
+def test_repository_needs_exactly_one_owner_argument(tmp_path, arguments, roles):
+    p = write_pack(tmp_path, f"  t1:\n    arguments: {arguments}\n    argument_roles: {roles}\n")
+    with pytest.raises(PackError, match="t1: .*exactly one owner argument"):
+        load_pack(p)
+
+
+@pytest.mark.parametrize("role", ["other", "id", "repository_id"])
+def test_nested_value_only_for_content(tmp_path, role):
+    p = write_pack(
+        tmp_path, f"  t1:\n    arguments: {{x: {{a: 1}}}}\n    argument_roles: {{x: {role}}}\n"
+    )
+    with pytest.raises(PackError, match="t1: argument 'x' has a nested value"):
+        load_pack(p)
+    p = write_pack(
+        tmp_path, "  t1:\n    arguments: {x: {a: [1]}}\n    argument_roles: {x: content}\n"
+    )
+    assert load_pack(p).entries["t1"].arguments == {"x": {"a": [1]}}
+
+
+# --- validate_pack: the pack against tools/list -----------------------------------
+
+
+def tool(name: str, *props: str) -> Tool:
+    return Tool(
+        name=name,
+        input_schema={"type": "object", "properties": {p: {"type": "string"} for p in props}},
+    )
+
+
+ROLE_PACK = """
+  t1:
+    arguments: {owner: "{repo.owner}", repo: "{repo.name}", body: hi}
+    argument_roles: {owner: owner, repo: repository, body: content, state: other}
+  t2:
+    status: skipped
+    skip_reason: later
+"""
+
+
+def test_validate_pack_clean_returns_no_problems(tmp_path):
+    pack = load_pack(write_pack(tmp_path, ROLE_PACK))
+    tools = [tool("t1", "owner", "repo", "body", "state"), tool("t2", "anything")]
+    assert validate_pack(pack, tools) == []
+    assert pack_warnings(pack) == []
+
+
+def test_missing_tool_is_a_problem(tmp_path):
+    pack = load_pack(write_pack(tmp_path, ROLE_PACK))
+    assert validate_pack(pack, [tool("t2")]) == ["t1: not in the server's tools/list"]
+
+
+def test_undeclared_schema_property_is_a_problem(tmp_path):
+    pack = load_pack(write_pack(tmp_path, ROLE_PACK))
+    tools = [tool("t1", "owner", "repo", "body", "state", "new_owner")]
+    assert validate_pack(pack, tools) == [
+        "t1: input-schema property 'new_owner' has no declared role"
+    ]
+
+
+def test_role_for_a_property_not_in_the_schema_is_a_problem(tmp_path):
+    pack = load_pack(write_pack(tmp_path, ROLE_PACK))
+    tools = [tool("t1", "owner", "repo", "body")]
+    assert validate_pack(pack, tools) == [
+        "t1: role declared for 'state', which is not an input-schema property"
+    ]
+
+
+def test_unreadable_input_schema_is_a_problem(tmp_path):
+    pack = load_pack(write_pack(tmp_path, ROLE_PACK))
+    bad = Tool(name="t1", input_schema={"type": "object", "properties": ["owner"]})
+    assert validate_pack(pack, [bad]) == ["t1: the input schema's properties are not a mapping"]
+
+
+def test_skipped_entries_are_not_validated(tmp_path):
+    pack = load_pack(write_pack(tmp_path, ROLE_PACK))
+    tools = [tool("t1", "owner", "repo", "body", "state")]  # t2 is not listed at all
+    assert validate_pack(pack, tools) == []
+
+
+def test_validate_pack_rechecks_entries_built_in_code(tmp_path):
+    pack = load_pack(write_pack(tmp_path, ROLE_PACK))
+    entry = replace(
+        pack.entries["t1"], arguments={"owner": "outside-org", "repo": "{repo.name}", "x": 1}
+    )
+    pack = replace(pack, entries={"t1": entry})
+    problems = validate_pack(pack, [tool("t1", "owner", "repo", "body", "state")])
+    assert problems == [
+        "t1: owner argument 'owner' must be exactly '{repo.owner}', not 'outside-org'",
+        "t1: argument 'x' has no declared role",
+    ]
+
+
+def test_entry_without_roles_is_a_problem():
+    pack = load_pack(Path(__file__).parent.parent / "packs" / "fake.yaml")
+    pack = replace(pack, entries={"t1": ToolEntry(tool="t1")})
+    assert validate_pack(pack, [tool("t1", "issue_id")]) == [
+        "t1: input-schema property 'issue_id' has no declared role"
+    ]
+
+
+def test_id_only_tool_with_an_id_declared_otherwise_is_a_problem(tmp_path):
+    pack = load_pack(
+        write_pack(
+            tmp_path,
+            "  t1:\n    argument_roles: {issue_number: other, gist_id: id}\n",
+            extra="id_only_write_tools: [t1]\n",
+        )
+    )
+    assert validate_pack(pack, [tool("t1", "issue_number", "gist_id")]) == [
+        "t1: 'issue_number' looks like an ID of an ID-only write tool but is declared 'other'"
+    ]
+
+
+@pytest.mark.parametrize("role", ["content", "other", "id"])
+@pytest.mark.parametrize("prop", ["target_owner", "newowner", "org", "repoName", "ownér", "nwo"])
+def test_owner_like_property_declared_harmless_is_a_warning(tmp_path, role, prop):
+    pack = load_pack(write_pack(tmp_path, f'  t1:\n    argument_roles: {{"{prop}": {role}}}\n'))
+    tools = [tool("t1", prop)]
+    assert validate_pack(pack, tools) == []  # a warning is not a problem
+    assert pack_warnings(pack) == [
+        f"warning: t1: property {prop!r} may name an owner or repository but is declared "
+        f"{role!r}; check it by hand"
+    ]
+
+
+@pytest.mark.parametrize("prop", ["report", "body", "title"])
+def test_harmless_property_names_give_no_warning(tmp_path, prop):
+    pack = load_pack(write_pack(tmp_path, f"  t1:\n    argument_roles: {{{prop}: content}}\n"))
+    assert pack_warnings(pack) == []

@@ -8,21 +8,26 @@ standard_read_only_fields:
   - {path: issue.labels, kind: collection}
   - {path: issue.title, kind: scalar}
   - {path: issue.notes, kind: collection}
+# Every argument of every enabled tool declares its role (see pack.py).
 tools:
   get_issue:
     fixture: issue
+    argument_roles: {issue_id: id}
     arguments:
       issue_id: "{fixture.issue_id}"
   peek_and_touch:
     fixture: issue
+    argument_roles: {issue_id: id}
     arguments:
       issue_id: "{fixture.issue_id}"
   bump_hidden_counter:
     fixture: issue
+    argument_roles: {issue_id: id}
     arguments:
       issue_id: "{fixture.issue_id}"
   set_labels:
     fixture: issue
+    argument_roles: {issue_id: id, labels: content}
     arguments:
       issue_id: "{fixture.issue_id}"
       labels: [x]
@@ -30,6 +35,7 @@ tools:
     supplies: {issue.labels: labels}
   add_labels:
     fixture: issue
+    argument_roles: {issue_id: id, labels: content}
     arguments:
       issue_id: "{fixture.issue_id}"
       labels: [x]
@@ -37,6 +43,7 @@ tools:
     supplies: {issue.labels: labels}
   rename_issue:
     fixture: issue
+    argument_roles: {issue_id: id, title: content}
     arguments:
       issue_id: "{fixture.issue_id}"
       title: renamed
@@ -44,12 +51,14 @@ tools:
     supplies: {issue.title: title}
   append_note:
     fixture: issue
+    argument_roles: {issue_id: id, text: content}
     arguments:
       issue_id: "{fixture.issue_id}"
       text: a note
     fields: [{path: issue.notes, kind: collection}]
   explode:
     fixture: issue
+    argument_roles: {issue_id: id, label: other}
     arguments:
       issue_id: "{fixture.issue_id}"
       label: c

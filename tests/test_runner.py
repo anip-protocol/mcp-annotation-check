@@ -175,14 +175,151 @@ async def test_pack_skipped_tool_keeps_its_reason():
     assert result.calls == []
 
 
-async def test_pack_entry_for_missing_tool_is_error():
+async def test_skipped_pack_entry_for_missing_tool_is_error():
+    pack = load_pack(FAKE_PACK)
+    ghost = replace(pack.entries["get_issue"], tool="ghost", status="skipped", skip_reason="x")
+    _, results = await run_fake(pack=with_entries(pack, ghost=ghost))
+    got = by_tool(results)["ghost"]
+    assert got.outcome is Outcome.ERROR
+    assert got.error == "pack entry for unlisted tool"
+    assert {r.tool: r.outcome for r in results if r.tool != "ghost"} == EXPECTED
+
+
+async def test_enabled_pack_entry_for_missing_tool_stops_the_run():
     pack = load_pack(FAKE_PACK)
     pack = with_entries(pack, ghost=replace(pack.entries["get_issue"], tool="ghost"))
-    _, results = await run_fake(pack=pack)
-    ghost = by_tool(results)["ghost"]
-    assert ghost.outcome is Outcome.ERROR
-    assert ghost.error == "pack entry for unlisted tool"
-    assert {r.tool: r.outcome for r in results if r.tool != "ghost"} == EXPECTED
+    store = FakeStore()
+    header, results = await run_fake(pack=pack, store=store)
+    assert header.pack_problems == ["ghost: not in the server's tools/list"]
+    got = by_tool(results)
+    assert got["ghost"].outcome is Outcome.ERROR
+    assert got["ghost"].error == "pack entry for unlisted tool"
+    for name in EXPECTED:
+        assert got[name].outcome is Outcome.SKIPPED
+        assert got[name].skip_reason == "pack validation failed: 1 problem(s)"
+    assert store.issues == {}
+
+
+class RecordingReader(FakeReader):
+    def __init__(self, store: FakeStore) -> None:
+        super().__init__(store)
+        self.fixtures: list[str] = []
+
+    async def create_fixture(self, entry, run_id):
+        self.fixtures.append(entry.tool)
+        return await super().create_fixture(entry, run_id)
+
+
+class RecordingClient:
+    """Delegates to a real client and records every tools/call."""
+
+    def __init__(self, client) -> None:
+        self._client = client
+        self.called: list[str] = []
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+    async def call_tool(self, name, arguments):
+        self.called.append(name)
+        return await self._client.call_tool(name, arguments)
+
+
+async def test_validation_problem_stops_before_any_fixture(tmp_path):
+    import json
+
+    from mcp import Client
+
+    from support import HEADER_CONTEXT
+
+    pack = load_pack(FAKE_PACK)
+    labels = pack.entries["set_labels"]
+    no_role = replace(labels, argument_roles={"issue_id": "id"}, arguments={"issue_id": "x"})
+    title = pack.entries["rename_issue"]
+    extra_role = replace(title, argument_roles={**title.argument_roles, "owner": "owner"})
+    pack = with_entries(pack, set_labels=no_role, rename_issue=extra_role)
+    problems = [
+        "set_labels: input-schema property 'labels' has no declared role",
+        "rename_issue: role declared for 'owner', which is not an input-schema property",
+    ]
+    store = FakeStore()
+    reader = RecordingReader(store)
+    async with Client(build_fake_server(store)) as real:
+        client = RecordingClient(real)
+        header, results = await run(
+            client,
+            reader,
+            pack,
+            HEADER_CONTEXT,
+            before_call=None,
+            settle_interval_s=0.001,
+            settle_timeout_s=0.3,
+        )
+    assert reader.fixtures == []
+    assert client.called == []
+    assert store.issues == {}
+    assert sorted(header.pack_problems) == sorted(problems)
+    assert {r.tool for r in results} == set(EXPECTED)
+    for r in results:
+        assert r.outcome is Outcome.SKIPPED
+        assert r.skip_reason == "pack validation failed: 2 problem(s)"
+        assert r.calls == [] and r.verdicts == []
+    write_reports(header, results, tmp_path)
+    md = (tmp_path / "report.md").read_text()
+    assert "## Pack validation" in md
+    for problem in problems:
+        assert problem in md
+    data = json.loads((tmp_path / "report.json").read_text())
+    assert sorted(data["header"]["pack_problems"]) == sorted(problems)
+
+
+async def test_validation_failure_keeps_other_skip_reasons():
+    store = FakeStore()
+    server = build_fake_server(store)
+
+    @server.tool(name="extra", annotations=ToolAnnotations(destructive_hint=False))
+    def extra(issue_id: str) -> str:
+        return issue_id
+
+    pack = load_pack(FAKE_PACK)
+    pack = with_entries(pack, ghost=replace(pack.entries["get_issue"], tool="ghost"))
+    _, results = await run_fake(pack=pack, store=store, server=server)
+    assert by_tool(results)["extra"].skip_reason == "no pack entry yet"
+
+
+async def test_fake_pack_is_valid_against_the_fake_server():
+    header, _ = await run_fake()
+    assert header.pack_problems == []
+    assert header.pack_warnings == []
+
+
+async def test_validation_warnings_reach_the_header_and_the_run_continues(tmp_path):
+    store = FakeStore()
+    server = build_fake_server(store)
+
+    @server.tool(name="note_for", annotations=ToolAnnotations(destructive_hint=False))
+    def note_for(issue_id: str, target_owner: str) -> str:
+        store.touch(issue_id).notes.append(target_owner)
+        return issue_id
+
+    pack = load_pack(FAKE_PACK)
+    entry = replace(
+        pack.entries["append_note"],
+        tool="note_for",
+        arguments={"issue_id": "{fixture.issue_id}", "target_owner": "someone"},
+        argument_roles={"issue_id": "id", "target_owner": "content"},
+    )
+    pack = with_entries(pack, note_for=entry)
+    header, results = await run_fake(pack=pack, store=store, server=server)
+    warning = (
+        "warning: note_for: property 'target_owner' may name an owner or repository but is "
+        "declared 'content'; check it by hand"
+    )
+    assert header.pack_problems == []
+    assert header.pack_warnings == [warning]
+    assert by_tool(results)["note_for"].calls  # the run went ahead
+    write_reports(header, results, tmp_path)
+    assert warning in (tmp_path / "report.md").read_text()
 
 
 class ChurningReader(FakeReader):

@@ -1,3 +1,4 @@
+import dataclasses
 import subprocess
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from mcp_annotation_check import cli
 from mcp_annotation_check.github import launcher
 from mcp_annotation_check.github.safety import SafetyRefusal
+from mcp_annotation_check.report import RunHeader
 
 TOKEN = "github_pat_dummy0000000000000000"
 ENV = "MCP_ANNOTATION_CHECK_GITHUB_TOKEN"
@@ -190,7 +192,9 @@ def test_run_success_path_passes_secrets_closes_rest_and_keeps_token_off_args(
     async def fake_run(client, reader, pack, context, before_call=None, **kwargs):
         seen["run_kwargs"] = kwargs
         seen["context"] = context
-        return "header", []
+        fields = dataclasses.fields(RunHeader)
+        required = [f for f in fields if f.default_factory is dataclasses.MISSING]
+        return RunHeader(**{f.name: None for f in required}), []
 
     monkeypatch.setattr(cli, "GitHubRest", FakeRest)
     monkeypatch.setattr(cli, "Client", FakeClient)
@@ -237,3 +241,18 @@ def test_unset_docker_settings_are_not_invented(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     params = launcher.server_params("img:1", ["default"], [])
     assert not set(DOCKER_VARS) & set(params.env)
+
+
+def test_self_test_prints_pack_validation_problems(monkeypatch, tmp_path, capsys):
+    text = cli.FAKE_PACK.read_text().replace(
+        "argument_roles: {issue_id: id}", "argument_roles: {issue_id: id, owner: other}", 1
+    )
+    bad = tmp_path / "bad.yaml"
+    bad.write_text(text)
+    monkeypatch.setattr(cli, "FAKE_PACK", bad)
+    assert cli.main(["self-test", "--out", str(tmp_path / "out")]) == 0
+    captured = capsys.readouterr()
+    problem = "get_issue: role declared for 'owner', which is not an input-schema property"
+    assert f"pack validation problem: {problem}" in captured.err
+    assert "pack validation failed: 1 problem(s)" in captured.out
+    assert problem in (tmp_path / "out" / "report.md").read_text()

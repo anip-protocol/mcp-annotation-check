@@ -124,6 +124,12 @@ def pack_for(tool: str) -> Pack:
                     "issue_number": "{fixture.issue_number}",
                     "labels": ["a"],
                 },
+                argument_roles={
+                    "owner": "owner",
+                    "repo": "repository",
+                    "issue_number": "id",
+                    "labels": "content",
+                },
                 fields=[
                     FieldSpec("issue.labels", FieldKind.COLLECTION),
                     FieldSpec("issue.assignees", FieldKind.COLLECTION),
