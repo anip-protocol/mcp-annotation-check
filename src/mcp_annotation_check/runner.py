@@ -77,7 +77,7 @@ async def run(
 ) -> tuple[RunHeader, list[ToolResult]]:
     """Run every listed tool. Every error text is redacted against `secrets`."""
     secrets = (secrets,) if isinstance(secrets, str) else tuple(secrets)
-    listed = await _list_all_tools(client)
+    listed = await list_all_tools(client)
     header = _header(client, pack, header_context, listed)
     run_id = uuid.uuid4().hex[:8]
     results: list[ToolResult] = []
@@ -111,7 +111,7 @@ async def run(
     return header, results
 
 
-async def _list_all_tools(client: Client) -> list[Tool]:
+async def list_all_tools(client: Client) -> list[Tool]:
     tools: list[Tool] = []
     cursor: str | None = None
     while True:

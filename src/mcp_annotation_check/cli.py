@@ -20,7 +20,7 @@ from mcp_annotation_check.github.safety import make_before_call, preflight
 from mcp_annotation_check.pack import load_pack
 from mcp_annotation_check.redact import redact
 from mcp_annotation_check.report import WITHHELD, ToolResult, write_reports
-from mcp_annotation_check.runner import _list_all_tools, run
+from mcp_annotation_check.runner import list_all_tools, run
 
 FAKE_PACK = Path(__file__).resolve().parents[2] / "packs" / "fake.yaml"
 
@@ -119,7 +119,7 @@ async def _run_github(args: argparse.Namespace, token: str) -> list[ToolResult]:
 async def _list_tools(args: argparse.Namespace) -> int:
     params = server_params(args.image, _split(args.toolsets), _split(args.features))
     async with Client(params) as client:
-        tools = await _list_all_tools(client)
+        tools = await list_all_tools(client)
     listing = [
         {
             "name": t.name,
