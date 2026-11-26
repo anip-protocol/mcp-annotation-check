@@ -1,6 +1,6 @@
 """Serial runner: plan every listed tool, then judge enabled ones one at a time.
 
-Per judged tool: fixture, arguments, before-snapshot, call, settled after-snapshot
+Per judged tool: fixture, arguments, settled before-snapshot, call, settled after-snapshot
 (taken even when the call errored), rules, a second call for the idempotent check,
 and cleanup in a `finally`. A call that errored is judged like any other: a change
 against the claim is a FINDING (or OBSERVATION), but with no such change the tool is
@@ -273,7 +273,9 @@ class _ToolCheck:
             step = "argument rendering"
             self.arguments = render_arguments(self.entry, self.fixture, self.pack.repositories)
             step = "before-snapshot"
-            before = await self._read()
+            # Settled too: a read that lags behind fixture creation must not look like
+            # a change made by the call.
+            before = await self._settled()
             step = "call"
             await self._call()
             step = "after-snapshot"

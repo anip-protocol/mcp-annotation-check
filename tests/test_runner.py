@@ -208,6 +208,38 @@ class ChurningReader(FakeReader):
         return recorded
 
 
+class LaggingReader(FakeReader):
+    """The first read after a fixture is created is stale, as REST reads can lag."""
+
+    def __init__(self, store: FakeStore) -> None:
+        super().__init__(store)
+        self.fresh: set[str] = set()
+
+    async def create_fixture(self, entry, run_id):
+        fixture = await super().create_fixture(entry, run_id)
+        self.fresh.add(fixture["issue_id"])
+        return fixture
+
+    async def snapshot(self, fields, fixture):
+        recorded = await super().snapshot(fields, fixture)
+        if fixture["issue_id"] in self.fresh:
+            self.fresh.discard(fixture["issue_id"])
+            stale = {**recorded.snapshot}
+            if "issue.title" in stale:
+                stale["issue.title"] = "not yet visible"
+            return Recorded(stale, recorded.timestamps)
+        return recorded
+
+
+async def test_before_snapshot_is_settled_so_read_lag_cannot_fake_a_finding():
+    store = FakeStore()
+    _, results = await run_fake(store=store, reader=LaggingReader(store))
+    got = by_tool(results)
+    assert got["get_issue"].outcome is Outcome.PASS
+    assert got["bump_hidden_counter"].outcome is Outcome.PASS
+    assert {r.tool: r.outcome for r in results} == EXPECTED
+
+
 async def test_settle_timeout_is_error_and_run_continues():
     store = FakeStore()
     _, results = await run_fake(store=store, reader=ChurningReader(store, "get_issue"))

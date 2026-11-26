@@ -51,6 +51,6 @@ async def run_fake(
             HEADER_CONTEXT,
             before_call=before_call,
             secrets=secrets,
-            settle_interval_s=0.01,
+            settle_interval_s=0.001,
             settle_timeout_s=0.3,
         )
