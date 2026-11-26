@@ -1,8 +1,22 @@
-<!-- Published copy of the harness report for sweep round 1. One commit author email returned by get_commit and list_commits was replaced with [redacted]; nothing else was edited. -->
+<!-- Published copy of the harness report for sweep round 1. The Summary section was added by hand. In the harness output below it, one commit author email returned by get_commit and list_commits was replaced with [redacted]; nothing else was edited. -->
 
 # MCP annotation check report
 
 Findings apply to this image and configuration only.
+
+## Summary
+
+_Written by hand for this published copy. Everything from "Run" down is the harness's output._
+
+GitHub's MCP server v2.3.0 lists 62 tools. The harness tested 31 of them: 25 claiming `readOnlyHint: true` and 6 claiming `destructiveHint: false`. The other 31 make no testable claim or are skipped with a reason (see Coverage).
+
+- **2 findings.** [`update_issue_labels`](#update_issue_labels-finding) and [`update_issue_assignees`](#update_issue_assignees-finding) claim `destructiveHint: false` but replace existing values: labels `c` and `d` became `a`, and `assignees: []` removed the existing assignee. Both tools' descriptions say they replace. The label finding was reproduced in three runs and the assignee finding in two.
+- **3 observations.** [`update_issue_title`](#update_issue_title-observation), [`update_issue_body`](#update_issue_body-observation) and [`update_issue_state`](#update_issue_state-observation) overwrite a single value with exactly what the caller supplied. Whether that is "only additive" is [an open question](https://github.com/modelcontextprotocol/experimental-ext-tool-annotations/issues/10#issuecomment-7184047670).
+- **26 passes:** all 25 read-only tools tested, and [`add_issue_reaction`](#add_issue_reaction-pass).
+
+Every result below says "Review: unreviewed" because the harness never marks its own results as reviewed. The findings and observations were checked by hand before this copy was published, and the label finding was also confirmed in the issue's timeline on GitHub.
+
+A pass means no counterexample on these fixtures, not proof. The read-only comparison covers the fields listed under "Read-only comparison set", not releases, milestones or collaborators.
 
 ## Run
 

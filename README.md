@@ -6,11 +6,29 @@ It exists because tool annotations (`readOnlyHint`, `destructiveHint`, `idempote
 
 Licence: Apache-2.0.
 
+## Results
+
+First sweep, 26 November 2026: GitHub's MCP server v2.3.0 (`ghcr.io/github/github-mcp-server:v2.3.0`, local stdio, `--toolsets default --features issues_granular`). It lists 62 tools.
+
+| Claim | Tools claiming it | Tested | Result |
+|---|---|---|---|
+| `readOnlyHint: true` | 27 | 25 | all 25 pass |
+| `destructiveHint: false` | 15 | 6 | 2 findings, 3 observations, 1 pass |
+| `idempotentHint: true` | 1 | 0 | skipped: the tool starts Copilot work |
+
+- **`update_issue_labels`** claims `destructiveHint: false`. The issue's labels `c` and `d` were replaced by `a`. Its own description says "This replaces the current labels with the provided list." Reproduced in three runs.
+- **`update_issue_assignees`** makes the same claim. `assignees: []` removed the existing assignee. Reproduced in two runs.
+- **Observations:** `update_issue_title`, `update_issue_body` and `update_issue_state` overwrite a single value with exactly what the caller supplied. Whether that counts as "only additive updates" is an [open question to the Tool Annotations Interest Group](https://github.com/modelcontextprotocol/experimental-ext-tool-annotations/issues/10#issuecomment-7184047670).
+
+Not tested yet: two team tools (they need organization permissions), and nine `destructiveHint: false` tools whose effects the harness does not compare yet (new issues, comment reactions, milestones, sub-issues, hidden comments, issue fields and types). A pass means no counterexample on these fixtures, not proof, and the results apply to this image and configuration only.
+
+Full report, with every call and before/after diff: [results/2026-11-26-github-mcp-server-v2.3.0-round-1.md](results/2026-11-26-github-mcp-server-v2.3.0-round-1.md). Posted on [github-mcp-server#3760](https://github.com/github/github-mcp-server/issues/3760#issuecomment-7184390137) and [#10](https://github.com/modelcontextprotocol/experimental-ext-tool-annotations/issues/10#issuecomment-7186607131).
+
 ## Status
 
-Built and tested: the harness core, the safety checks, the report writer, the CLI, and a self-test against a built-in, deliberately mislabelled fake server.
+Done: the harness core, the safety checks, the report writer, the CLI, a self-test against a built-in, deliberately mislabelled fake server, the GitHub pack (`packs/github.yaml`, round 1) and the first live sweep above.
 
-**Not done yet:** the GitHub pack (`packs/github.yaml`), the live label reproduction and the live sweep. They wait for the owner's test account, organization and token (see below), and for the live checks recorded as Pending in [docs/verification.md](docs/verification.md). There are no results against GitHub's server yet, and none should be assumed.
+Not done yet: round 2 of the GitHub pack (the nine untested `destructiveHint: false` tools), and the live checks still marked Pending in [docs/verification.md](docs/verification.md).
 
 ## Only explicit claims are tested
 
@@ -28,9 +46,9 @@ The harness calls tools that can write. The token is the boundary: a fine-graine
 - A safety refusal stops the whole run. Arguments are never rewritten.
 - Checks run one at a time. The harness never posts, comments or publishes anywhere.
 
-### Owner prerequisites
+### Setting up a test account
 
-The maintainer does these:
+To run the harness against GitHub yourself:
 
 - Create the separate GitHub account and test organization, after checking GitHub's terms on secondary accounts.
 - Create two private repositories in it: one for read-only checks, one for write tools. Turn off GitHub Actions for the organization. In the write repository, create the label `mcp-annotation-check:done`.
@@ -83,7 +101,7 @@ mcp-annotation-check list-tools --image ghcr.io/github/github-mcp-server:<tag> \
 
 ### `run`
 
-Runs a pack against GitHub's MCP server in Docker and writes the reports to `--out`. Needs the token and a pack, which does not exist yet for GitHub.
+Runs a pack against GitHub's MCP server in Docker and writes the reports to `--out`. Needs the token and a pack; `packs/github.yaml` names the test organization, repositories and read fixtures it was written for, so change those to your own.
 
 ```
 mcp-annotation-check run --pack packs/github.yaml \
@@ -158,8 +176,7 @@ The report header records the server info, image and digest, toolsets and featur
 
 Every finding starts as `unreviewed`. The harness never publishes. Nothing is published until every finding has been reviewed by hand. A read-only violation is reported privately to the server's maintainers first.
 
-## Next steps (owner)
+## Next steps
 
-1. Complete the owner prerequisites and run the pending checks in [docs/verification.md](docs/verification.md).
-2. Write `packs/github.yaml`, then run the label reproduction and the sweep.
-3. Follow up on the discussion in #10, and run the fix check on a fixed image. The fix sets `destructiveHint: true` on the label tools, and a `true` destructive claim is not tested, so the live label test with the fixed image tag should give SKIPPED with "no explicit claim": the claim was corrected, not shown to hold. (If the fixed tool also claims `idempotentHint: true`, that check runs and its own outcome is reported instead.)
+1. Round 2: compare the state the nine untested `destructiveHint: false` tools change, and test them.
+2. Run the fix check on a fixed image once [#3791](https://github.com/github/github-mcp-server/pull/3791) or [#3800](https://github.com/github/github-mcp-server/pull/3800) is released. The fix sets `destructiveHint: true` on the label tools, and a `true` destructive claim is not tested, so the live label test with the fixed image tag should give SKIPPED with "no explicit claim": the claim was corrected, not shown to hold. (If the fixed tool also claims `idempotentHint: true`, that check runs and its own outcome is reported instead.)

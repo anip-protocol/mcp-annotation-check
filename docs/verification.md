@@ -5,8 +5,9 @@ was run, when, and what was seen.
 
 ## What `GET /user/repos` lists for a fine-grained token
 
-**Status: Pending: requires the owner's fine-grained token.** Nothing below has been
-observed yet.
+**Status: Pending.** The test account and tokens exist and the preflight passes (see
+Shakedown below), but the test that tells a token-scoped listing from an account-scoped
+one has not been run yet.
 
 ### Why it matters
 
@@ -132,28 +133,18 @@ preflight step 4 is filtered by the token and proves nothing beyond step 3.
 `claim_counts` (tools claiming readOnlyHint true, destructiveHint false while not
 read-only, idempotentHint true while not read-only).
 
-## Pending: GitHub server launch flags
+## GitHub server launch flags
 
-Not yet run: it needs the owner's token and test organization, which do not exist yet.
-No Docker image was pulled or run while writing the launcher.
+### Observed (2026-11-26)
 
-What will be run, once they exist:
+`ghcr.io/github/github-mcp-server:v2.3.0` (digest above), started by the launcher with
+`stdio --toolsets=default --features=issues_granular`, accepted the flags and listed 62
+tools, including `update_issue_labels` with `destructiveHint: false`. The shakedown and
+sweep round 1 both ran this way.
 
-```
-export MCP_ANNOTATION_CHECK_GITHUB_TOKEN=<fine-grained token>
-mcp-annotation-check list-tools --image ghcr.io/github/github-mcp-server:<latest> \
-  --toolsets default --out out/tools-latest.json
-mcp-annotation-check list-tools --image ghcr.io/github/github-mcp-server:<unfixed tag> \
-  --toolsets default --features issues_granular --out out/tools-unfixed.json
-```
-
-Expected: the second list contains `update_issue_labels` with `destructiveHint: false`,
-and the first is the default tool set. Also compare `docker run ... --help` with the
-flags `server_params` renders (`stdio --toolsets=<a,b> [--features=<x,y>]`); if the
-syntax differs, fix `server_params`.
-
-To record here: both image tags, their digests (`image_digest`), the tool count of each
-list, the date, and whether the flag syntax matched `--help`.
+Not run yet: `list-tools` against a release that carries the label fix, because none had
+been released on 2026-11-26. Record that image's tag, digest and tool count here when it
+exists.
 
 ## Before writing `packs/github.yaml`
 
@@ -171,6 +162,7 @@ The owner created these by hand in `mcp-annotation-check-lab/read-fixtures`; the
 
 The pack is checked offline against `tests/data/tools-v2.3.0.json` (the 62 tools of the
 shakedown above; how it was built is in the file's `_built` field) by
-`tests/test_github_pack.py`. The next live run uses
+`tests/test_github_pack.py`. Round 1 ran on 2026-11-26 against
 `ghcr.io/github/github-mcp-server:v2.3.0` with `--toolsets default --features
-issues_granular`.
+issues_granular`; the results are in
+[`results/2026-11-26-github-mcp-server-v2.3.0-round-1.md`](../results/2026-11-26-github-mcp-server-v2.3.0-round-1.md).
