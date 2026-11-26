@@ -11,6 +11,11 @@ a safety refusal: the run stops. `run` builds its client with the pack's write
 repository only (the read repository's fixtures are made by hand and never
 written); `shakedown` with none, so it refuses every write. GET is never
 restricted: preflight and the reader's snapshots only read.
+
+A write must also be one the harness's fixtures use: after `/repos/<owner>/<name>/` the
+path starts with `issues`, `labels`, `pulls`, `milestones`, `git/refs` or `contents/`
+(whole segments). Anything else (forks, transfer, generate, hooks, collaborators,
+keys, ...) is refused before sending.
 """
 
 import re
@@ -36,7 +41,7 @@ class RestRefused(Exception):
     def __init__(self, method: str, path: str) -> None:
         self.method = method
         self.path = path
-        super().__init__(f"refusing {method} {path}: outside the pack's repositories")
+        super().__init__(f"refusing {method} {path}: outside the pack's repositories or allowed paths")
 
 
 def _repository_key(full_name: str) -> str | None:
@@ -48,6 +53,18 @@ def _repository_key(full_name: str) -> str | None:
     return f"{owner}/{name}".lower()
 
 
+_RESOURCES = frozenset({"issues", "labels", "pulls", "milestones"})
+
+
+def _allowed_resource(rest: list[str]) -> bool:
+    """rest: the path segments after /repos/<owner>/<name>/ (at least one)."""
+    if rest[0] in _RESOURCES:
+        return True
+    if rest[0] == "contents":
+        return len(rest) > 1
+    return rest[:2] == ["git", "refs"]
+
+
 def _write_target(path: str) -> str | None:
     """The lower-case "owner/name" a write path is strictly inside, or None."""
     if any(c in path for c in "?#%\\") or not path.isascii():
@@ -57,6 +74,8 @@ def _write_target(path: str) -> str | None:
     if len(parts) < 5 or parts[0] != "" or parts[1] != "repos":
         return None
     if any(p in ("", ".", "..") for p in parts[1:]):
+        return None
+    if not _allowed_resource(parts[4:]):
         return None
     return _repository_key(f"{parts[2]}/{parts[3]}")
 

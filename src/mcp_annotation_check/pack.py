@@ -83,7 +83,7 @@ _MENTION = re.compile(r"(?<![\w.])@[A-Za-z0-9-]+")
 _XREF = re.compile(r"[\w.-]+/[\w.-]+#\d+")
 _PLACEHOLDER = re.compile(r"\{(fixture\.[\w]+|repo\.owner|repo\.name)\}")
 # The only value an id or repository_id argument may have: one whole fixture
-# placeholder, so every ID names an object the harness created (or a read fixture).
+# placeholder, so every ID comes from a fixture or from the pack's read_fixtures.
 _FIXTURE_ID = re.compile(r"\{fixture\.[A-Za-z0-9_]+\}")
 _OWNER = re.compile(r"[A-Za-z0-9_.-]+")  # ASCII only, as the safety checks require
 _FULL_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -217,12 +217,25 @@ def _role_problems(entry: ToolEntry) -> list[str]:
     ]
     if entry.status != "enabled":
         return problems
+    if entry.repository == "read":
+        if entry.fixture not in (None, "none"):
+            problems.append(
+                f"{tool}: a read-repository entry may not use fixture {entry.fixture!r} "
+                "(fixtures write; use read_fixtures)"
+            )
+        if entry.custom_setup:
+            problems.append(f"{tool}: a read-repository entry may not use custom_setup")
     owners = repositories = 0
     for name, value in entry.arguments.items():
         role = roles.get(name)
         if role is None:
             problems.append(f"{tool}: argument {name!r} has no declared role")
             continue
+        if role in ("other", "content") and looks_like_id(name):
+            problems.append(
+                f"{tool}: argument {name!r} looks like an ID but is declared {role!r}; "
+                "declare it id or repository_id"
+            )
         owners += role == "owner"
         repositories += role == "repository"
         expected = _PLACEHOLDER_ROLES.get(role)

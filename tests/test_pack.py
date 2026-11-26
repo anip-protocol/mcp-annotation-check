@@ -648,3 +648,28 @@ def test_no_target_does_not_depend_on_annotations(tmp_path):
             "no_target_tools"
         )
     ]
+
+
+def test_read_entry_with_fixture_refused(tmp_path):
+    p = write_pack(tmp_path, "  t1:\n    repository: read\n    fixture: issue\n    arguments: {}\n    argument_roles: {}\n")
+    with pytest.raises(PackError, match="t1: a read-repository entry may not use fixture"):
+        load_pack(p)
+
+
+@pytest.mark.parametrize("fixture", ["", "    fixture: none\n"])
+def test_read_entry_with_no_fixture_loads(tmp_path, fixture):
+    p = write_pack(tmp_path, f"  t1:\n    repository: read\n{fixture}    arguments: {{}}\n    argument_roles: {{}}\n")
+    assert load_pack(p).entries["t1"].repository == "read"
+
+
+def test_read_entry_with_custom_setup_refused(tmp_path):
+    p = write_pack(tmp_path, "  t1:\n    repository: read\n    custom_setup: setup\n    arguments: {}\n    argument_roles: {}\n")
+    with pytest.raises(PackError, match="t1: a read-repository entry may not use custom_setup"):
+        load_pack(p)
+
+
+@pytest.mark.parametrize("role", ["other", "content"])
+def test_id_like_name_declared_other_refused(tmp_path, role):
+    p = write_pack(tmp_path, f"  t1:\n    arguments: {{issue_number: x}}\n    argument_roles: {{issue_number: {role}}}\n")
+    with pytest.raises(PackError, match="t1: argument 'issue_number' looks like an ID"):
+        load_pack(p)
