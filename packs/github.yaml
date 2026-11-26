@@ -1,0 +1,67 @@
+# GitHub's MCP server (github/github-mcp-server), starter pack.
+# Milestone 1: the label reproduction (github/github-mcp-server#3760) plus two
+# controls on the same fixture. The curated sweep is added after the first real
+# tools/list (docs/verification.md).
+server: github-mcp-server
+version: "0.1"
+allowlist: [mcp-annotation-check-lab]
+repositories:
+  write: mcp-annotation-check-lab/write-fixture
+  read: mcp-annotation-check-lab/read-fixtures
+# Repository-level state only, so the shakedown needs no fixed issue yet.
+standard_read_only_fields:
+  - {path: repo.labels, kind: collection}
+  - {path: repo.refs, kind: collection}
+  - {path: repo.issues, kind: collection}
+tools:
+  # Claims destructiveHint: false, but replaces the issue's labels.
+  # Expected: FINDING (labels c and d lost).
+  update_issue_labels:
+    fixture: issue_with_labels
+    repository: write
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      issue_number: "{fixture.issue_number}"
+      labels: [a]
+    argument_roles: {owner: owner, repo: repository, issue_number: id, labels: content}
+    fields: &issue_fields
+      - {path: issue.labels, kind: collection}
+      - {path: issue.assignees, kind: collection}
+      - {path: issue.title, kind: scalar}
+      - {path: issue.body, kind: scalar}
+      - {path: issue.state, kind: scalar}
+    supplies: {issue.labels: labels}
+  # Control: claims destructiveHint: false and only adds a reaction.
+  # Expected: PASS (nothing removed from the same fixture).
+  add_issue_reaction:
+    fixture: issue_with_labels
+    repository: write
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      issue_number: "{fixture.issue_number}"
+      content: "+1"
+    argument_roles: {owner: owner, repo: repository, issue_number: id, content: content}
+    # The reaction set, not the issue's reaction count: a count going 0 -> 1 is a
+    # scalar change and would read as a loss.
+    fields:
+      - {path: issue.labels, kind: collection}
+      - {path: issue.assignees, kind: collection}
+      - {path: issue.title, kind: scalar}
+      - {path: issue.body, kind: scalar}
+      - {path: issue.state, kind: scalar}
+      - {path: issue.reaction_set, kind: collection}
+  # Control: claims destructiveHint: false and overwrites a single value the caller
+  # supplied. Expected: OBSERVATION, not FINDING.
+  update_issue_title:
+    fixture: issue_with_labels
+    repository: write
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      issue_number: "{fixture.issue_number}"
+      title: mcp-annotation-check renamed
+    argument_roles: {owner: owner, repo: repository, issue_number: id, title: content}
+    fields: *issue_fields
+    supplies: {issue.title: title}

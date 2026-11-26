@@ -1,0 +1,67 @@
+server: fake
+version: "0"
+allowlist: []
+repositories:
+  write: owner/write-repo
+  read: owner/read-repo
+standard_read_only_fields:
+  - {path: issue.labels, kind: collection}
+  - {path: issue.title, kind: scalar}
+  - {path: issue.notes, kind: collection}
+# The fake server's tools take only issue IDs, so each is declared ID-only.
+id_only_write_tools: [get_issue, peek_and_touch, set_labels, add_labels, rename_issue, append_note, bump_hidden_counter, explode]
+# Every argument of every enabled tool declares its role (see pack.py).
+tools:
+  get_issue:
+    fixture: issue
+    argument_roles: {issue_id: id}
+    arguments:
+      issue_id: "{fixture.issue_id}"
+  peek_and_touch:
+    fixture: issue
+    argument_roles: {issue_id: id}
+    arguments:
+      issue_id: "{fixture.issue_id}"
+  bump_hidden_counter:
+    fixture: issue
+    argument_roles: {issue_id: id}
+    arguments:
+      issue_id: "{fixture.issue_id}"
+  set_labels:
+    fixture: issue
+    argument_roles: {issue_id: id, labels: content}
+    arguments:
+      issue_id: "{fixture.issue_id}"
+      labels: [x]
+    fields: [{path: issue.labels, kind: collection}]
+    supplies: {issue.labels: labels}
+  add_labels:
+    fixture: issue
+    argument_roles: {issue_id: id, labels: content}
+    arguments:
+      issue_id: "{fixture.issue_id}"
+      labels: [x]
+    fields: [{path: issue.labels, kind: collection}]
+    supplies: {issue.labels: labels}
+  rename_issue:
+    fixture: issue
+    argument_roles: {issue_id: id, title: content}
+    arguments:
+      issue_id: "{fixture.issue_id}"
+      title: renamed
+    fields: [{path: issue.title, kind: scalar}]
+    supplies: {issue.title: title}
+  append_note:
+    fixture: issue
+    argument_roles: {issue_id: id, text: content}
+    arguments:
+      issue_id: "{fixture.issue_id}"
+      text: a note
+    fields: [{path: issue.notes, kind: collection}]
+  explode:
+    fixture: issue
+    argument_roles: {issue_id: id, label: other}
+    arguments:
+      issue_id: "{fixture.issue_id}"
+      label: c
+    fields: [{path: issue.labels, kind: collection}]

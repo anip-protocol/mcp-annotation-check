@@ -245,3 +245,20 @@ The maintainer does these:
 - Create two private repositories in it: one for read-only checks, one for write tools. Turn off GitHub Actions for the organization. In the write repository, create the label `mcp-annotation-check:done`.
 - Create a fine-grained token with the test organization as its resource owner, access to those two repositories only, and these repository permissions: Metadata read; Contents read and write; Issues read and write; Pull requests read and write. No account permissions, and no Actions, Administration or Workflows permissions. The plan may narrow this further once each tool's needs are known.
 - Create the new repository under `anip-protocol` once the name is agreed.
+
+## Amendment 1 (2026-11-25, after the first build's review)
+
+These changes replace the matching parts above where they conflict.
+
+**A new outcome: UNJUDGED.** "We can't judge this field yet" is not a failed call. A non-destructive check over a composite field (comments, refs, a repository's issue list, a repository's label definitions) judges the other fields as usual. If those show a finding, the result is FINDING. Otherwise it is UNJUDGED, naming the composite fields. An issue's own labels are a set of names, not composite, and are always judged.
+
+**Outcome ranking.** A tool's outcome is its most severe result, in this order: FINDING, ERROR, UNJUDGED, OBSERVATION, PASS, SKIPPED. A finding outranks everything, so it always reaches the coverage counts the hand review works from. The coverage summary counts UNJUDGED separately.
+
+**Argument roles in the pack.** Each pack entry declares the role of every argument in the tool's input schema: `owner`, `repository`, `full_name`, `repository_id`, `id`, `content` or `other`. Name-based detection of owner arguments is replaced by these declarations.
+- Owner and repository arguments in a pack may only be the placeholders `{repo.owner}`, `{repo.name}` and `{repo.owner}/{repo.name}`, so they render to the pack's own repositories by construction.
+- Before the first call, the whole pack is validated against the server's `tools/list`: every enabled tool exists, every input-schema property has a declared role, every declared role names a real property, and owner and repository values are placeholders. Any problem stops the run before a fixture is created.
+- Per call, an argument with no declared role is refused, and each value is checked by its role.
+
+**Shakedown before the first live run.** A `shakedown` command runs the preflight, starts the server, reads `tools/list`, validates the pack and takes one read-only snapshot. It never calls a tool and never creates a fixture. It is meant for a read-only token first: it exercises the preflight, launcher and reader with no write possible. Real verdicts need the read-write token afterwards, because a mislabelled tool would just fail on permission.
+
+**When a finding is withheld (owner's decision).** A public report listing every other tool would reveal the withheld one by elimination, so the full sweep report is held until the server's maintainers fix the tool or 90 days pass, whichever comes first. The label reproduction is posted on #10 straight away: it is already public as github/github-mcp-server#3760.
