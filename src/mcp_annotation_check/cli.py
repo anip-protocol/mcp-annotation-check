@@ -65,6 +65,13 @@ def _validation(header: RunHeader) -> list[str]:
     return lines + list(header.pack_warnings)  # each warning starts "warning: "
 
 
+def _stopped_early(header: RunHeader, results: list[ToolResult]) -> bool:
+    """True if the run stopped before every tool was judged: a pack problem or a refusal."""
+    return bool(header.pack_problems) or any(
+        (r.skip_reason or "").startswith("run stopped after a safety refusal") for r in results
+    )
+
+
 def _summary(results: list[ToolResult]) -> list[str]:
     lines = []
     withheld = 0
@@ -369,7 +376,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(args.out / name)
         print("outcomes:")
         print("\n".join(_summary(results)))
-        return 0
+        return 2 if _stopped_early(header, results) else 0
 
     if args.command == "self-test":
         server_logger = logging.getLogger(_SERVER_LOGGER)
@@ -385,4 +392,5 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(args.out / name)
         print("outcomes:")
         print("\n".join(_summary(results)))
+        return 2 if _stopped_early(header, results) else 0
     return 0

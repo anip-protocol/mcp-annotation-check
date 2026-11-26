@@ -250,9 +250,41 @@ def test_self_test_prints_pack_validation_problems(monkeypatch, tmp_path, capsys
     bad = tmp_path / "bad.yaml"
     bad.write_text(text)
     monkeypatch.setattr(cli, "FAKE_PACK", bad)
-    assert cli.main(["self-test", "--out", str(tmp_path / "out")]) == 0
+    assert cli.main(["self-test", "--out", str(tmp_path / "out")]) == 2
     captured = capsys.readouterr()
     problem = "get_issue: role declared for 'owner', which is not an input-schema property"
     assert f"pack validation problem: {problem}" in captured.err
     assert "pack validation failed: 1 problem(s)" in captured.out
     assert problem in (tmp_path / "out" / "report.md").read_text()
+
+
+def _early_stop_results(reason):
+    from mcp_annotation_check.report import ToolResult
+    from mcp_annotation_check.snapshot import Outcome
+
+    def result(tool, outcome, skip_reason=None):
+        return ToolResult(tool, "", None, outcome, [], skip_reason, None, [], 0.0, None, False)
+
+    return [result("a", Outcome.PASS), result("b", Outcome.SKIPPED, reason)]
+
+
+@pytest.mark.parametrize(
+    "problems, reason, code",
+    [
+        ([], "not a claim we check", 0),
+        (["x: bad"], "not a claim we check", 2),
+        ([], "run stopped after a safety refusal on a", 2),
+    ],
+)
+def test_run_exits_nonzero_after_an_early_stop(monkeypatch, tmp_path, problems, reason, code):
+    monkeypatch.setenv(ENV, TOKEN)
+
+    async def fake_run_github(args, token):
+        fields = dataclasses.fields(RunHeader)
+        required = [f for f in fields if f.default_factory is dataclasses.MISSING]
+        header = RunHeader(**{f.name: None for f in required})
+        header.pack_problems = problems
+        return header, _early_stop_results(reason)
+
+    monkeypatch.setattr(cli, "_run_github", fake_run_github)
+    assert cli.main(_run_args(tmp_path)) == code
