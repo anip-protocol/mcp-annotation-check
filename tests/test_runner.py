@@ -12,7 +12,13 @@ from mcp_annotation_check.report import write_reports
 from mcp_annotation_check.rules import Outcome
 from mcp_annotation_check.runner import CUSTOM_SETUPS, CUSTOM_VERDICTS, ToolResult, run
 from mcp_annotation_check.settle import SettleTimeout, settle
-from mcp_annotation_check.snapshot import Recorded, Verdict
+from mcp_annotation_check.snapshot import (
+    COMPOSITE_FIELDS,
+    FieldKind,
+    FieldSpec,
+    Recorded,
+    Verdict,
+)
 from support import FAKE_PACK, run_fake, with_entries
 
 EXPECTED = {
@@ -564,3 +570,68 @@ async def test_call_tool_raising_with_no_change_is_error():
     assert secret not in error
     assert got["set_labels"].verdicts  # kept as evidence
     assert got["add_labels"].outcome is Outcome.PASS
+
+
+# --- composite collection fields (ruling R17) -----------------------------------
+
+
+class CommentsReader(FakeReader):
+    """Adds `issue.comments`, a composite field whose elements are (index, text) tuples."""
+
+    async def snapshot(self, fields, fixture):
+        plain = [f for f in fields if f.path != "issue.comments"]
+        recorded = await super().snapshot(plain, fixture)
+        snap = dict(recorded.snapshot)
+        if any(f.path == "issue.comments" for f in fields):
+            notes = self.store.issues[fixture["issue_id"]].notes
+            snap["issue.comments"] = frozenset(enumerate(notes))
+        return Recorded(snap, recorded.timestamps)
+
+
+COMMENTS = FieldSpec("issue.comments", FieldKind.COLLECTION)
+COMPOSITE_ERROR = "field issue.comments can't be judged non-destructively yet (composite elements)"
+
+
+def test_composite_fields_are_defined_in_one_place():
+    assert COMPOSITE_FIELDS == {"issue.comments", "repo.refs", "repo.issues", "repo.labels"}
+
+
+async def test_non_destructive_check_on_composite_field_is_error():
+    store = FakeStore()
+    pack = load_pack(FAKE_PACK)
+    entry = replace(pack.entries["append_note"], fields=[COMMENTS])
+    entry_set = replace(pack.entries["set_labels"], fields=[COMMENTS], supplies={})
+    pack = with_entries(pack, append_note=entry, set_labels=entry_set)
+    _, results = await run_fake(pack=pack, store=store, reader=CommentsReader(store))
+    got = by_tool(results)
+
+    labels = got["set_labels"]
+    assert labels.outcome is Outcome.ERROR
+    assert labels.error == COMPOSITE_ERROR
+    (verdict,) = labels.verdicts
+    assert verdict.check is Check.NON_DESTRUCTIVE
+    assert verdict.outcome is Outcome.ERROR
+    assert verdict.detail == COMPOSITE_ERROR
+    assert verdict.schema_text == SCHEMA_TEXT[Check.NON_DESTRUCTIVE]
+
+    # the idempotent check still uses the composite field (equality is safe)
+    note = got["append_note"]
+    verdicts = {v.check: v for v in note.verdicts}
+    assert verdicts[Check.NON_DESTRUCTIVE].outcome is Outcome.ERROR
+    assert verdicts[Check.IDEMPOTENT].outcome is Outcome.FINDING
+    assert "issue.comments" in verdicts[Check.IDEMPOTENT].changed
+    assert note.outcome is Outcome.ERROR
+    assert COMPOSITE_ERROR in note.error
+    assert store.issues == {}
+
+
+async def test_read_only_check_still_uses_composite_fields():
+    store = FakeStore()
+    pack = load_pack(FAKE_PACK)
+    pack = replace(pack, standard_read_only_fields=[*pack.standard_read_only_fields, COMMENTS])
+    _, results = await run_fake(pack=pack, store=store, reader=CommentsReader(store))
+    got = by_tool(results)
+    assert got["get_issue"].outcome is Outcome.PASS
+    assert "issue.comments" in got["get_issue"].verdicts[0].detail
+    assert got["peek_and_touch"].outcome is Outcome.FINDING
+    assert "issue.comments" in got["peek_and_touch"].verdicts[0].changed

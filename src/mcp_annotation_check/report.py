@@ -247,10 +247,16 @@ def _diff_text(v: Verdict, custom: bool = False) -> str:
     """Render every differing field; mark which ones count against the claim.
 
     Under a custom verdict an uncounted field is not necessarily additive, so the
-    mark says only that the custom verdict did not count it.
+    mark says only that the custom verdict did not count it. A verdict that is an
+    ERROR judged nothing, so its fields are marked "not judged".
     """
     counted = "lost or overwritten" if v.check is Check.NON_DESTRUCTIVE else "changed"
-    uncounted = "not counted by the custom verdict" if custom else "additive"
+    if v.outcome is Outcome.ERROR:
+        uncounted = "not judged"
+    elif custom:
+        uncounted = "not counted by the custom verdict"
+    else:
+        uncounted = "additive"
     out: list[str] = []
     for path, (before, after) in v.diff.items():
         out.append(f"@@ {path} @@ {counted if path in v.changed else uncounted}")

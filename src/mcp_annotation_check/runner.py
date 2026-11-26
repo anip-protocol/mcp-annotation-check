@@ -37,7 +37,13 @@ from mcp_annotation_check.rules import (
     judge_read_only,
 )
 from mcp_annotation_check.settle import SettleTimeout, settle
-from mcp_annotation_check.snapshot import FieldSpec, Outcome, Recorded, Verdict
+from mcp_annotation_check.snapshot import (
+    COMPOSITE_FIELDS,
+    FieldSpec,
+    Outcome,
+    Recorded,
+    Verdict,
+)
 
 __all__ = ["CUSTOM_SETUPS", "CUSTOM_VERDICTS", "RunHeader", "ToolResult", "run"]
 
@@ -383,6 +389,21 @@ class _ToolCheck:
         if check is Check.READ_ONLY:
             return judge_read_only(before, after, fields)
         if check is Check.NON_DESTRUCTIVE:
+            composite = [f.path for f in fields if f.path in COMPOSITE_FIELDS]
+            if composite:
+                noun = "field" if len(composite) == 1 else "fields"
+                detail = (
+                    f"{noun} {', '.join(composite)} can't be judged non-destructively yet "
+                    "(composite elements)"
+                )
+                self.errors.append(detail)
+                return Verdict(
+                    check,
+                    Outcome.ERROR,
+                    detail,
+                    schema_text=SCHEMA_TEXT[check],
+                    diff=diff_fields(before, after, fields),
+                )
             supplied = supplied_values(self.entry, self.arguments, fields)
             return judge_non_destructive(before, after, fields, supplied)
         return judge_idempotent(before, after, fields)

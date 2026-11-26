@@ -93,6 +93,8 @@ Each tool gets one outcome (the most severe of its checks):
 - **SKIPPED**: no check ran, with the reason (for example "no pack entry yet" for a tool the server lists that the pack does not mention).
 - **ERROR**: the harness could not reach a verdict (a failed REST call with its HTTP status, state that did not settle within the timeout, a pack entry naming a tool the server does not list), or a call failed and no change counting against the claim was observed ("call failed; no change observed in ...", with the call's error; the checks are kept as evidence). A failed call that changed nothing has not shown the claim true. An ERROR is not a pass.
 
+A non-destructive check over a field whose elements are whole objects (an issue's comments, a repository's refs, issues or labels) is an ERROR for now: "can't be judged non-destructively yet (composite elements)". Editing one object in place would look like a loss. Read-only and idempotent checks still compare these fields.
+
 "No change observed in ..." describes the fields and scope the harness compared, not proof that nothing changed. Changes outside the compared fields are not observed.
 
 Read-only violations are private. They appear only in `private-findings.md`; the public `report.md` and `report.json` do not name the tool or show its evidence, and say only how many results were withheld.

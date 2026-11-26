@@ -18,6 +18,15 @@ class FieldSpec:
     kind: FieldKind
 
 
+# Collection fields whose elements are tuples, each describing one object (a comment,
+# a ref, an issue, a label). Editing one object in place removes one tuple and adds
+# another, which the non-destructive rule would read as a loss. Until elements are
+# matched by identity, a non-destructive check over any of these is an ERROR, not a
+# verdict (ruling R17). Read-only and idempotent checks compare for equality and still
+# use them.
+COMPOSITE_FIELDS = frozenset({"issue.comments", "repo.refs", "repo.issues", "repo.labels"})
+
+
 # Keyed by FieldSpec.path. Collections are frozensets of hashables; scalars are hashable or None.
 Snapshot = dict[str, Any]
 

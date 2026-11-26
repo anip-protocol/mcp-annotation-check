@@ -105,3 +105,19 @@ def test_cli_self_test_writes_reports(tmp_path, capsys):
     assert "finding" in out
     for name in ("report.md", "report.json", "private-findings.md"):
         assert (tmp_path / name).is_file()
+
+
+def test_unjudged_verdict_diff_is_marked_not_judged():
+    from mcp_annotation_check.claims import Check
+    from mcp_annotation_check.report import _diff_text
+    from mcp_annotation_check.snapshot import Outcome, Verdict
+
+    v = Verdict(
+        Check.NON_DESTRUCTIVE,
+        Outcome.ERROR,
+        "field issue.comments can't be judged non-destructively yet (composite elements)",
+        diff={"issue.comments": (frozenset({(1, "old")}), frozenset({(1, "new")}))},
+    )
+    text = _diff_text(v)
+    assert "@@ issue.comments @@ not judged" in text
+    assert "additive" not in text
