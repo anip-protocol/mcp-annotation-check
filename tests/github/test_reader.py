@@ -153,6 +153,26 @@ async def test_issue_with_labels_fixture_calls():
     ]
 
 
+async def test_issue_with_assignee_assigns_the_token_account():
+    def handler(request):
+        if request.method == "GET" and request.url.path == "/user":
+            return httpx.Response(200, json={"login": "bot"})
+        if request.url.path.endswith("/issues"):
+            return httpx.Response(201, json={"number": 7})
+        return httpx.Response(200, json={})
+
+    reader, calls = make(handler)
+    fixture = await reader.create_fixture(entry("issue_with_assignee", "update_issue_assignees"), "abc")
+    assert fixture == {"repository": "o/write", "issue_number": 7, "assignee": "bot"}
+    assert [c for c in calls if c[0] == "POST"] == [
+        (
+            "POST",
+            "/repos/o/write/issues",
+            {"title": "mac-abc-update_issue_assignees", "body": "fixture", "assignees": ["bot"]},
+        )
+    ]
+
+
 async def test_missing_labels_are_created():
     def handler(request):
         if request.method == "GET":

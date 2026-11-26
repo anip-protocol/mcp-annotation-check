@@ -62,6 +62,8 @@ class FakeGitHub:
         if path == "/repos/o/write/labels" and method == "POST":
             self.labels[body["name"]] = label_object(body["name"], len(self.labels))
             return httpx.Response(201, json=self.labels[body["name"]])
+        if path == "/user" and method == "GET":
+            return httpx.Response(200, json={"login": "bot"})
         if path == "/repos/o/write/issues" and method == "POST":
             number = len(self.issues) + 1
             self.issues[number] = {
@@ -70,7 +72,7 @@ class FakeGitHub:
                 "body": body["body"],
                 "state": "open",
                 "labels": [],
-                "assignees": [{"login": "alice"}],
+                "assignees": [{"login": a} for a in body.get("assignees", ["alice"])],
                 "user": {"login": "tester"},
                 "updated_at": NOW,
             }
@@ -107,6 +109,11 @@ def build(github: FakeGitHub) -> MCPServer:
         github.set_labels(issue_number, have + [n for n in labels if n not in have])
         return "ok"
 
+    @server.tool(name="update_issue_assignees", annotations=ANNOTATIONS)
+    def update_issue_assignees(owner: str, repo: str, issue_number: int, assignees: list[str]) -> str:
+        github.issues[issue_number]["assignees"] = [{"login": a} for a in assignees]
+        return "ok"
+
     @server.tool(name="add_issue_reaction", annotations=ANNOTATIONS)
     def add_issue_reaction(owner: str, repo: str, issue_number: int, content: str) -> str:
         github.reactions.setdefault(issue_number, []).append(
@@ -123,6 +130,13 @@ def build(github: FakeGitHub) -> MCPServer:
 
 
 def pack_for(tool: str) -> Pack:
+    if "reaction" in tool:
+        extra_args, extra_roles, supplies = {"content": "+1"}, {"content": "content"}, {}
+    elif "assignees" in tool:
+        extra_args, extra_roles, supplies = {"assignees": []}, {"assignees": "content"}, {}
+    else:
+        extra_args, extra_roles = {"labels": ["a"]}, {"labels": "content"}
+        supplies = {"issue.labels": "labels"}
     return Pack(
         server="s",
         version="0",
@@ -132,18 +146,18 @@ def pack_for(tool: str) -> Pack:
         entries={
             tool: ToolEntry(
                 tool=tool,
-                fixture="issue_with_labels",
+                fixture="issue_with_assignee" if "assignees" in tool else "issue_with_labels",
                 arguments={
                     "owner": "{repo.owner}",
                     "repo": "{repo.name}",
                     "issue_number": "{fixture.issue_number}",
-                    **({"content": "+1"} if "reaction" in tool else {"labels": ["a"]}),
+                    **extra_args,
                 },
                 argument_roles={
                     "owner": "owner",
                     "repo": "repository",
                     "issue_number": "id",
-                    **({"content": "content"} if "reaction" in tool else {"labels": "content"}),
+                    **extra_roles,
                 },
                 fields=[
                     FieldSpec("issue.labels", FieldKind.COLLECTION),
@@ -153,7 +167,7 @@ def pack_for(tool: str) -> Pack:
                     FieldSpec("issue.state", FieldKind.SCALAR),
                     FieldSpec("issue.reaction_set", FieldKind.COLLECTION),
                 ],
-                supplies={} if "reaction" in tool else {"issue.labels": "labels"},
+                supplies=supplies,
             )
         },
     )
@@ -209,3 +223,10 @@ async def test_removing_a_reaction_is_a_finding():
 
 def test_issue_labels_is_not_composite():
     assert "issue.labels" not in COMPOSITE_FIELDS
+
+
+async def test_update_issue_assignees_replacing_is_a_finding():
+    verdict, result, _ = await judged("update_issue_assignees")
+    assert result.outcome is Outcome.FINDING
+    assert verdict.outcome is Outcome.FINDING
+    assert verdict.changed["issue.assignees"] == (frozenset({"bot"}), frozenset())

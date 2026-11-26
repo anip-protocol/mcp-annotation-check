@@ -10,7 +10,7 @@ from mcp_annotation_check.snapshot import FieldSpec, Recorded
 KEEP_LABELS = {"c", "d", "mcp-annotation-check:done"}
 DONE_LABEL = "mcp-annotation-check:done"
 _LABEL_COLOR = "ededed"
-_ISSUE_FIXTURES = {"issue_with_labels", "plain_issue", "issue_with_comment"}
+_ISSUE_FIXTURES = {"issue_with_labels", "plain_issue", "issue_with_comment", "issue_with_assignee"}
 _FIXTURES = _ISSUE_FIXTURES | {"open_pr", "none"}
 
 
@@ -66,6 +66,12 @@ class GitHubReader:
             for label in ("c", "d"):
                 await self._ensure_label(repo, label, state)
             body["labels"] = ["c", "d"]
+        if name == "issue_with_assignee":
+            # The token's own account: the only user guaranteed to be assignable in
+            # the test organization.
+            login = (await self.rest.get("/user"))["login"]
+            body["assignees"] = [login]
+            fixture["assignee"] = login
         issue = await self.rest.post(f"/repos/{repo}/issues", body)
         state["issue_number"] = issue["number"]
         fixture["issue_number"] = issue["number"]
