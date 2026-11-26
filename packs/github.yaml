@@ -27,7 +27,12 @@ standard_read_only_fields:
   - {path: repo.issues, kind: collection}
   - {path: issue.comments, kind: collection}
   - {path: issue.reactions, kind: scalar}
+  - {path: issue.body, kind: scalar}
+  - {path: issue.assignees, kind: collection}
   - {path: pr.state, kind: scalar}
+  - {path: pr.title, kind: scalar}
+  - {path: pr.body, kind: scalar}
+  - {path: pr.requested_reviewers, kind: collection}
 # These name no repository by design: get_me takes no arguments, the searches only a
 # query (scoped to the read repository where the tool searches its content).
 no_target_tools: [get_me, search_code, search_commits, search_repositories, search_users]
