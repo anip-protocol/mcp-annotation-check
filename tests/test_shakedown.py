@@ -70,6 +70,8 @@ def make_rest(requests):
             )
         if path == "/user/orgs":
             return httpx.Response(200, json=[{"login": "owner"}])
+        if path == "/repos/owner/read-repo/issues/1":
+            return httpx.Response(200, json={"title": "t", "updated_at": "2026-01-01T00:00:00Z"})
         if path == "/repos/owner/read-repo/labels":
             return httpx.Response(
                 200, json=[{"name": "bug", "color": "f00", "description": "d"}]
@@ -109,11 +111,29 @@ async def test_shakedown_never_calls_tools_or_creates_fixtures(tmp_path):
     assert all(s.calls == 0 for s in spies) and spies
     assert SpyReader.created == 0
     assert requests and all(method == "GET" for method, _ in requests)
+    assert ok is True
     assert report["steps"]["snapshot"]["passed"] is True
     assert report["snapshot_fields"] == ["repo.labels"]
     assert "bug" not in json.dumps(report)  # field names, never values
     assert report["tool_names"] and len(report["tools_list_sha256"]) == 64
     assert report["server_info"] and report["image"] == "img"
+
+
+async def test_shakedown_snapshot_uses_read_fixtures_for_issue_fields(tmp_path):
+    from dataclasses import replace
+
+    pack = replace(
+        pack_for_github(),
+        standard_read_only_fields=[FieldSpec("issue.title", FieldKind.SCALAR)],
+        read_fixtures={"issue_number": 1},
+    )
+    requests = []
+    ok, _ = await run_shakedown(pack, tmp_path, requests)
+    report = json.loads((tmp_path / "shakedown.json").read_text())
+    assert report["steps"]["snapshot"]["passed"] is True, report["steps"]["snapshot"]
+    assert report["snapshot_fields"] == ["issue.title"]
+    assert ok is True
+    assert ("GET", "/repos/owner/read-repo/issues/1") in requests
 
 
 async def test_shakedown_reports_validation_problems_and_exits_nonzero(tmp_path):

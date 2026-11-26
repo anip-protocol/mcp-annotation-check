@@ -167,8 +167,10 @@ async def shakedown(
     """Preflight, start the server, tools/list, validate the pack, one read-only snapshot.
 
     Never calls a tool, creates or cleans up a fixture, or sends a non-GET request. Each
-    step's outcome goes to out/shakedown.json (a failed step marks the later ones "not
-    run"); the file is redacted. True only if every step passed with no validation problems.
+    step's outcome goes to out/shakedown.json (a failed preflight, or a server that does
+    not start, leaves the later ones "not run"; a failed validation does not stop the
+    snapshot); the file is redacted. True only if every step passed with no validation
+    problems.
     """
     secrets = [token]
     steps: dict[str, dict] = {n: {"status": "not run", "passed": False} for n in SHAKEDOWN_STEPS}
@@ -240,7 +242,7 @@ async def _shakedown_server(open_client, reader, pack, report, passed, failed) -
                 else:
                     passed("validate")
             try:
-                fixture = {"repository": pack.repositories["read"]}
+                fixture = {**pack.read_fixtures, "repository": pack.repositories["read"]}
                 recorded = await reader.snapshot(pack.standard_read_only_fields, fixture)
                 report["snapshot_fields"] = sorted(recorded.snapshot)
             except Exception as error:  # noqa: BLE001
