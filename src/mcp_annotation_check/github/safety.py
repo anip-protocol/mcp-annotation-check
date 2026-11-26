@@ -25,17 +25,20 @@ Per-call checks (`make_before_call`):
   - Owner and repository arguments, at any depth. Keys are matched on their words
     joined in lower case (`Owner`, `owner_login`, `ownerLogin` are the same key):
       * owner keys: `owner`, `org`, `organization`, `user`, `username` and their
-        `…_login`/`…_name` forms, plus `repo_owner`/`repository_owner`;
+        `…_login`/`…_name` forms, `repo_owner`/`repository_owner`, and `login`,
+        `namespace` and `account`;
       * repository keys: `repo`, `repository`, `repo_name`, `repository_name`, as
         "owner/name" or as a bare name paired with the one owner given at the same
         level; full-name keys (`full_name`, `repository_full_name`, `name_with_owner`)
         must be "owner/name";
       * `repo_id`/`repository_id` are resolved through `GET /repositories/{id}` for
         every tool, not only ID-only ones.
-    Every owner named must be allowlisted. Refused as uninterpretable: any other key
-    containing an owner or repository word (`orgs`, `user_id`, `owner_type`,
-    `repositories`, …), a non-string value, a bare name with no owner or several
-    owners, and a malformed name.
+    Every owner named must be allowlisted. Refused as uninterpretable: any key with a
+    non-ASCII character; any other key whose joined lower-case form contains `owner`,
+    `organi`, `org`, `repo`, `user`, `nwo`, `login`, `namespace` or `account`
+    (`orgs`, `user_id`, `owner_type`, `newowner`, `targetrepo`, …), except the
+    known-harmless `report`, `reports` and `reporter`; a non-string value; a bare
+    name with no owner or several owners; and a malformed name.
   - Tools on the pack's `id_only_write_tools` list have their top-level ID arguments
     resolved to an owner through REST before the call:
       * global IDs resolve on their own: `repository_id`/`repo_id`
@@ -76,11 +79,18 @@ _OWNER_KEYS = {
     "owner", "ownerlogin", "ownername", "repoowner", "repositoryowner",
     "org", "orglogin", "orgname", "organization", "organizationlogin", "organizationname",
     "organisation", "user", "userlogin", "username",
+    "login", "namespace", "account",
 }
 _REPO_KEYS = {"repo", "reponame", "repository", "repositoryname"}  # "owner/name" or bare
 _FULL_NAME_KEYS = {"fullname", "repofullname", "repositoryfullname", "namewithowner", "nwo"}
 _REPO_ID_KEYS = {"repoid", "repositoryid"}
-# Any other key containing one of these words cannot be interpreted, and is refused.
+# Any other key whose joined lower-case form contains one of these stems (so that
+# `newowner` or `targetrepo`, written with no separator, are caught too) cannot be
+# interpreted, and is refused, unless it is one of the known-harmless keys below.
+_OWNER_STEMS = ("owner", "organi", "org", "repo", "user", "nwo", "login", "namespace", "account")
+# Keys that contain a stem but name no owner or repository. Keep this minimal.
+_HARMLESS_KEYS = {"report", "reports", "reporter"}
+# Any other key containing one of these words is refused too (kept alongside the stems).
 _OWNER_WORDS = {
     "owner", "owners", "org", "orgs", "organization", "organizations", "organisation",
     "organisations", "user", "users", "username", "usernames",
@@ -239,6 +249,8 @@ def _level(d: dict, tool: str, named: _Named, top: bool) -> None:
     for key, value in d.items():
         if not isinstance(key, str):
             continue
+        if not key.isascii():
+            raise SafetyRefusal(f"{tool}: argument {key!r} has a non-ASCII name; refusing")
         words = _words(key)
         kind = "".join(words)
         if kind in _OWNER_KEYS:
@@ -251,7 +263,9 @@ def _level(d: dict, tool: str, named: _Named, top: bool) -> None:
             repos.append((key, value, kind in _REPO_KEYS))
         elif kind in _REPO_ID_KEYS:
             named.repo_ids.append((key, _plain_id(key, value, tool)))
-        elif _OWNER_WORDS.intersection(words):
+        elif kind in _HARMLESS_KEYS:
+            continue
+        elif _OWNER_WORDS.intersection(words) or any(stem in kind for stem in _OWNER_STEMS):
             raise SafetyRefusal(
                 f"{tool}: cannot interpret argument {key!r}, which may name an owner or "
                 "repository; refusing"

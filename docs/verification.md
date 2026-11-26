@@ -59,7 +59,9 @@ for the duration of this check only:
    "hides <name>: it is filtered by the token". Without the variables it prints what was
    listed, and the comparison against the web UI must be done by hand.
 3. Remove the account from the throwaway organization and delete the throwaway
-   repository. Preflight step 4 refuses to run while they exist, which is expected.
+   repository. If the step-4 endpoints report the account, preflight step 4 refuses to
+   run while they exist, which is expected; if the endpoints are filtered by the token,
+   step 4 does not see them and passes (the vacuous case below).
 
 ### What each result means
 

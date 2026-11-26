@@ -334,6 +334,9 @@ async def test_owner_key_variants_checked(arguments):
         {"organization": "Test-Org"},
         {"owner_login": ORG, "repository_name": "write-repo"},
         {"username": ORG},
+        {"login": ORG},
+        {"namespace": "Test-Org"},
+        {"account": ORG},
         {"report": "weekly", "body": "text", "sort_order": "asc", "category": "x"},
     ],
 )
@@ -376,3 +379,39 @@ async def test_repository_id_resolved_for_any_tool():
     gh = GitHub({"/repositories/5": repo(WRITE)})
     await make_before_call(gh.rest, pack())("get_repository", {"repoId": 5})
     assert [r.url.path for r in gh.requests] == ["/repositories/5"]
+
+
+# --- keys that join an owner or repository word without a separator (fix round 2) ---
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["newowner", "targetrepo", "forkorganization", "NEWOWNER", "ownér", "repository_slug",
+     "accountid", "targetnamespace", "userlogins", "org2"],
+)
+@pytest.mark.parametrize("value", ["outside-org", "outside-org/x", ORG, WRITE])
+async def test_unrecognised_owner_like_key_refused(key, value):
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal, match="cannot interpret|non-ASCII"):
+        await make_before_call(gh.rest, pack())("some_tool", {key: value})
+    assert gh.requests == []
+
+
+@pytest.mark.parametrize("key", ["login", "namespace", "account", "Login", "NAMESPACE"])
+async def test_login_namespace_account_are_owner_keys(key):
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal, match="outside-org"):
+        await make_before_call(gh.rest, pack())("some_tool", {key: "outside-org"})
+
+
+@pytest.mark.parametrize("key", ["report", "reports", "reporter"])
+async def test_known_harmless_keys_allowed(key):
+    gh = GitHub()
+    await make_before_call(gh.rest, pack())("some_tool", {key: "outside-org/thing"})
+    assert gh.requests == []
+
+
+async def test_non_ascii_key_refused_even_without_an_owner_word():
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal, match="non-ASCII"):
+        await make_before_call(gh.rest, pack())("some_tool", {"tïtle": "x"})

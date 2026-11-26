@@ -275,6 +275,34 @@ async def test_before_call_refusal_is_error_and_cleanup_runs():
     assert store.issues == {}
 
 
+async def test_refusal_on_the_idempotent_second_call_stops_the_run():
+    from mcp_annotation_check.github.safety import SafetyRefusal
+
+    seen: list[str] = []
+
+    async def before_call(tool: str, arguments: dict) -> None:
+        seen.append(tool)
+        if tool == "append_note" and seen.count("append_note") == 2:
+            raise SafetyRefusal("refused on the second call")
+
+    store = FakeStore()
+    _, results = await run_fake(store=store, before_call=before_call)
+    got = by_tool(results)
+    note = got["append_note"]
+    assert note.outcome is Outcome.ERROR
+    assert "refused on the second call" in note.error
+    assert len(note.calls) == 1  # the first call ran; the second was refused
+    names = [r.tool for r in results]
+    after = names[names.index("append_note") + 1 :]
+    assert after  # the fake server lists tools after append_note
+    for name in after:
+        assert got[name].outcome is Outcome.SKIPPED
+        assert got[name].skip_reason == "run stopped after a safety refusal on append_note"
+        assert got[name].calls == []
+    assert seen[-1] == "append_note"
+    assert store.issues == {}
+
+
 async def test_before_call_checks_the_idempotent_second_call():
     seen: list[str] = []
 
