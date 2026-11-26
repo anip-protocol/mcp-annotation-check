@@ -54,11 +54,10 @@ class FakeGitHub:
     def handler(self, request: httpx.Request) -> httpx.Response:
         path, method = request.url.path, request.method
         body = json.loads(request.content) if request.content else {}
-        if m := re.fullmatch(r"/repos/o/write/labels/([^/]+)", path):
-            if method == "GET":
-                if m[1] in self.labels:
-                    return httpx.Response(200, json=self.labels[m[1]])
-                return httpx.Response(404, json={"message": "Not Found"})
+        if (m := re.fullmatch(r"/repos/o/write/labels/([^/]+)", path)) and method == "GET":
+            if m[1] in self.labels:
+                return httpx.Response(200, json=self.labels[m[1]])
+            return httpx.Response(404, json={"message": "Not Found"})
         if path == "/repos/o/write/labels" and method == "POST":
             self.labels[body["name"]] = label_object(body["name"], len(self.labels))
             return httpx.Response(201, json=self.labels[body["name"]])
@@ -83,12 +82,11 @@ class FakeGitHub:
             if method == "PATCH":
                 issue.update(body)
                 return httpx.Response(200, json=issue)
-        if m := re.fullmatch(r"/repos/o/write/issues/(\d+)/labels", path):
-            if method == "POST":
-                number = int(m[1])
-                have = [x["name"] for x in self.issues[number]["labels"]]
-                self.set_labels(number, have + [n for n in body["labels"] if n not in have])
-                return httpx.Response(200, json=self.issues[number]["labels"])
+        if (m := re.fullmatch(r"/repos/o/write/issues/(\d+)/labels", path)) and method == "POST":
+            number = int(m[1])
+            have = [x["name"] for x in self.issues[number]["labels"]]
+            self.set_labels(number, have + [n for n in body["labels"] if n not in have])
+            return httpx.Response(200, json=self.issues[number]["labels"])
         return httpx.Response(404, json={"message": f"unexpected {method} {path}"})
 
 
