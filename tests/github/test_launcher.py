@@ -92,3 +92,28 @@ def test_list_tools_failure_is_redacted(monkeypatch, tmp_path, capsys):
     assert code != 0
     captured = capsys.readouterr()
     assert TOKEN not in captured.out + captured.err
+
+
+def test_keyboard_interrupt_gives_130_and_no_traceback(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv(ENV, TOKEN)
+
+    async def interrupted(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "preflight", interrupted)
+    assert cli.main(_run_args(tmp_path)) == 130
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert TOKEN not in err
+
+
+def test_system_exit_inside_run_is_redacted(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv(ENV, TOKEN)
+
+    async def exits(*a, **k):
+        raise SystemExit(f"bye {TOKEN}")
+
+    monkeypatch.setattr(cli, "preflight", exits)
+    assert cli.main(_run_args(tmp_path)) != 0
+    captured = capsys.readouterr()
+    assert TOKEN not in captured.out + captured.err

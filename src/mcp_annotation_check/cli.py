@@ -171,7 +171,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(f"{count} tools written to {args.out}")
                 return 0
             results = asyncio.run(_run_github(args, token))
-        except Exception as error:  # noqa: BLE001 - everything is redacted, never a traceback
+        except KeyboardInterrupt:
+            print("interrupted", file=sys.stderr)
+            return 130
+        except BaseException as error:  # noqa: BLE001 - everything is redacted, never a traceback
             return _fail(error, token)
         for name in ("report.md", "report.json", "private-findings.md"):
             print(args.out / name)
