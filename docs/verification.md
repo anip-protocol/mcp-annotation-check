@@ -99,22 +99,38 @@ For `/user/orgs` and `/user/repos?affiliation=owner` (preflight step 4):
 _Pending. Record here: the date, which result above was seen for each endpoint, and the
 printed lines._
 
-## Pending: shakedown (the first live step)
+## Shakedown (the first live step)
 
-Run `shakedown` before anything else live, first with a read-only token, then with the
-read-write token. It makes no write of any kind (no tool call, no fixture, only GET requests).
+Run `shakedown` before anything else live. It makes no write of any kind (no tool call,
+no fixture, only GET requests).
 
 ```
-export MCP_ANNOTATION_CHECK_GITHUB_TOKEN=<read-only fine-grained token>
+export MCP_ANNOTATION_CHECK_GITHUB_TOKEN=<fine-grained token>
 mcp-annotation-check shakedown --pack packs/github.yaml --login <test-account> \
-  --image ghcr.io/github/github-mcp-server:<tag> --toolsets default --out out/shakedown-ro
-# then, with the read-write token:
-mcp-annotation-check shakedown ... --out out/shakedown-rw
+  --image ghcr.io/github/github-mcp-server:<tag> --toolsets default --out out/shakedown
 ```
 
 Expected: exit 0 and every step `passed` in `shakedown.json`. A read-only token cannot
 give real verdicts (a mislabelled tool would just fail on permission), so the sweep
-itself needs the read-write token, after both shakedowns pass.
+itself needs the read-write token.
+
+### Observed (2026-11-26, four runs against GitHub's MCP server)
+
+1. The image was not pulled: `docker image inspect` failed. `image_digest` now runs
+   `docker pull` once when the image is not local.
+2. A stale `ghcr.io` login made the pull fail; `docker logout ghcr.io` fixed it.
+3. The pack named a repository that did not exist; corrected.
+4. The fixture repository was empty: `git/matching-refs` answered 409 ("Git Repository
+   is empty"). `repo.refs` now reads that as no refs.
+5. The run then passed with both tokens: 62 tools, protocol 2026-07-28, image digest
+   `sha256:f8ee4dedc7d5c8cb32854ab91cc92a31c55a8a5510708cf8742e9f9427588ca6`.
+
+Finding: `/user/orgs` returned `[]` although the account owns the organization, so
+preflight step 4 is filtered by the token and proves nothing beyond step 3.
+
+`shakedown.json` now also records every tool's annotations (`tool_annotations`) and
+`claim_counts` (tools claiming readOnlyHint true, destructiveHint false while not
+read-only, idempotentHint true while not read-only).
 
 ## Pending: GitHub server launch flags
 

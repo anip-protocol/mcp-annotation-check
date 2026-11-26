@@ -410,3 +410,48 @@ async def test_open_pr_fixture_happy_path_and_cleanup():
         ("POST", "/repos/o/write/issues/11/labels", {"labels": ["mcp-annotation-check:done"]}),
         ("DELETE", "/repos/o/write/git/refs/heads/mac-r-t", None),
     ]
+
+
+async def test_reaction_set_snapshot():
+    def handler(request):
+        if request.url.path == "/repos/o/write/issues/7":
+            return httpx.Response(200, json={"updated_at": "2026-01-01T00:00:00Z"})
+        if request.url.path == "/repos/o/write/issues/7/reactions":
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": 1, "user": {"login": "alice", "id": 5}, "content": "+1"},
+                    {"id": 2, "user": {"login": "bob", "id": 6}, "content": "heart"},
+                ],
+            )
+        return httpx.Response(404, json={})
+
+    reader, calls = make(handler)
+    rec = await reader.snapshot(
+        [FieldSpec("issue.reaction_set", FieldKind.COLLECTION)],
+        {"repository": "o/write", "issue_number": 7},
+    )
+    assert rec.snapshot == {"issue.reaction_set": frozenset({("alice", "+1"), ("bob", "heart")})}
+    assert all(method == "GET" for method, _, _ in calls)
+
+
+async def test_refs_empty_repository_409_is_empty():
+    def handler(request):
+        return httpx.Response(409, json={"message": "Git Repository is empty."})
+
+    reader, _ = make(handler)
+    rec = await reader.snapshot(
+        [FieldSpec("repo.refs", FieldKind.COLLECTION)], {"repository": "o/write"}
+    )
+    assert rec.snapshot == {"repo.refs": frozenset()}
+
+
+async def test_refs_other_error_raises():
+    def handler(request):
+        return httpx.Response(500, json={})
+
+    reader, _ = make(handler)
+    with pytest.raises(GitHubError):
+        await reader.snapshot(
+            [FieldSpec("repo.refs", FieldKind.COLLECTION)], {"repository": "o/write"}
+        )

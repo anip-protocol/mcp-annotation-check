@@ -160,6 +160,12 @@ class GitHubReader:
                 return (await issue())[path.removeprefix("issue.")]
             case "issue.reactions":
                 return (await issue())["reactions"]["total_count"]
+            case "issue.reaction_set":
+                await issue()  # records the issue timestamp
+                reactions = await self.rest.get(
+                    f"/repos/{repo}/issues/{fixture['issue_number']}/reactions"
+                )
+                return frozenset((r["user"]["login"], r["content"]) for r in reactions)
             case "issue.comments":
                 await issue()  # records the issue timestamp
                 comments = await self.rest.get(
@@ -176,7 +182,13 @@ class GitHubReader:
             case "repo.refs":
                 refs: list[dict[str, Any]] = []
                 for prefix in ("heads/", "tags/"):
-                    refs += await self.rest.get(f"/repos/{repo}/git/matching-refs/{prefix}")
+                    try:
+                        refs += await self.rest.get(f"/repos/{repo}/git/matching-refs/{prefix}")
+                    except GitHubError as error:
+                        # 409 is GitHub's "Git Repository is empty": no refs at all.
+                        if error.status != 409:
+                            raise
+                        return frozenset()
                 return frozenset((r["ref"], r["object"]["sha"]) for r in refs)
             case "repo.labels":
                 labels = await self.rest.get(f"/repos/{repo}/labels")

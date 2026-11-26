@@ -68,7 +68,7 @@ mcp-annotation-check shakedown --pack packs/github.yaml --login <test-account> \
   --image ghcr.io/github/github-mcp-server:<tag> --toolsets default --out out/shakedown
 ```
 
-`out/shakedown.json` records the image and digest, server info, protocol version, the `tools/list` hash and tool names, pack validation problems and warnings, the snapshot's field names (not values) and pass or fail per step; a failed preflight, or a server that does not start, leaves the later steps "not run" (a failed validation does not stop the snapshot, which only reads). The token never appears in it. Exit code 0 only when every step passed and there are no validation problems. A read-only token proves the preflight, launcher and reader work with no write possible; real verdicts need the read-write token, because a mislabelled tool would just fail on permission.
+`out/shakedown.json` records the image and digest, server info, protocol version, the `tools/list` hash and tool names, pack validation problems and warnings, every tool's annotations and the counts of tools making each claim the sweep tests, the snapshot's field names (not values) and pass or fail per step; a failed preflight, or a server that does not start, leaves the later steps "not run" (a failed validation does not stop the snapshot, which only reads). The token never appears in it. Exit code 0 only when every step passed and there are no validation problems. A read-only token proves the preflight, launcher and reader work with no write possible; real verdicts need the read-write token, because a mislabelled tool would just fail on permission.
 
 ### `list-tools`
 

@@ -211,6 +211,8 @@ async def shakedown(
         "protocol_version": None,
         "tools_list_sha256": None,
         "tool_names": [],
+        "tool_annotations": {},
+        "claim_counts": None,
         "validation_problems": [],
         "validation_warnings": pack_warnings(pack),
         "snapshot_fields": [],
@@ -239,6 +241,25 @@ async def shakedown(
     return all(s["passed"] for s in steps.values()) and not report["validation_problems"]
 
 
+ANNOTATION_HINTS = ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint")
+
+
+def _claim_counts(annotations: dict[str, dict]) -> dict[str, int]:
+    """How many tools make each claim the sweep tests."""
+    values = list(annotations.values())
+    return {
+        "readOnlyHint_true": sum(a.get("readOnlyHint") is True for a in values),
+        "destructiveHint_false_not_read_only": sum(
+            a.get("destructiveHint") is False and a.get("readOnlyHint") is not True
+            for a in values
+        ),
+        "idempotentHint_true_not_read_only": sum(
+            a.get("idempotentHint") is True and a.get("readOnlyHint") is not True
+            for a in values
+        ),
+    }
+
+
 async def _shakedown_server(open_client, reader, pack, report, passed, failed) -> None:
     started = False
     try:
@@ -257,6 +278,16 @@ async def _shakedown_server(open_client, reader, pack, report, passed, failed) -
                 return
             listing = [t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in tools]
             report["tool_names"] = sorted(t.name for t in tools)
+            annotations = {
+                t["name"]: {
+                    k: v
+                    for k, v in (t.get("annotations") or {}).items()
+                    if k in ANNOTATION_HINTS
+                }
+                for t in listing
+            }
+            report["tool_annotations"] = dict(sorted(annotations.items()))
+            report["claim_counts"] = _claim_counts(annotations)
             report["tools_list_sha256"] = tools_list_digest(listing)
             passed("tools_list")
             try:

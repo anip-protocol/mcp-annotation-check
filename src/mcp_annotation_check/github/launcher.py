@@ -15,6 +15,8 @@ import subprocess
 
 from mcp import StdioServerParameters
 
+from mcp_annotation_check.redact import redact
+
 TOKEN_ENV = "MCP_ANNOTATION_CHECK_GITHUB_TOKEN"
 SERVER_TOKEN_ENV = "GITHUB_PERSONAL_ACCESS_TOKEN"
 # The docker CLI's own settings: passed to `docker run` when set, so it talks to the
@@ -49,8 +51,7 @@ def server_params(
     return StdioServerParameters(command="docker", args=args, env=env)
 
 
-def image_digest(image: str) -> str:
-    """The image's first repo digest, e.g. `ghcr.io/...@sha256:...`."""
+def _inspect(image: str) -> str:
     out = subprocess.run(
         ["docker", "image", "inspect", "--format", "{{index .RepoDigests 0}}", image],
         capture_output=True,
@@ -58,3 +59,24 @@ def image_digest(image: str) -> str:
         check=True,
     )
     return out.stdout.strip()
+
+
+def image_digest(image: str) -> str:
+    """The image's first repo digest, e.g. `ghcr.io/...@sha256:...`.
+
+    An image that is not local is pulled once (`docker pull` inherits the environment,
+    DOCKER_* included, and never receives the token), then inspected again.
+    """
+    try:
+        return _inspect(image)
+    except subprocess.CalledProcessError:
+        pass
+    try:
+        subprocess.run(["docker", "pull", image], capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as error:
+        secrets = [t for t in (os.environ.get(TOKEN_ENV),) if t]
+        stderr = error.stderr if isinstance(error.stderr, str) else ""
+        raise RuntimeError(
+            f"docker pull {image} failed: {redact(stderr.strip(), secrets)}"
+        ) from None
+    return _inspect(image)

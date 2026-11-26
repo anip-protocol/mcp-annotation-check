@@ -42,6 +42,7 @@ class FakeGitHub:
     def __init__(self) -> None:
         self.labels: dict[str, dict] = {}
         self.issues: dict[int, dict] = {}
+        self.reactions: dict[int, list[dict]] = {}
 
     def label(self, name: str) -> dict:
         return self.labels.setdefault(name, label_object(name, len(self.labels)))
@@ -82,6 +83,8 @@ class FakeGitHub:
             if method == "PATCH":
                 issue.update(body)
                 return httpx.Response(200, json=issue)
+        if (m := re.fullmatch(r"/repos/o/write/issues/(\d+)/reactions", path)) and method == "GET":
+            return httpx.Response(200, json=self.reactions.get(int(m[1]), []))
         if (m := re.fullmatch(r"/repos/o/write/issues/(\d+)/labels", path)) and method == "POST":
             number = int(m[1])
             have = [x["name"] for x in self.issues[number]["labels"]]
@@ -104,6 +107,18 @@ def build(github: FakeGitHub) -> MCPServer:
         github.set_labels(issue_number, have + [n for n in labels if n not in have])
         return "ok"
 
+    @server.tool(name="add_issue_reaction", annotations=ANNOTATIONS)
+    def add_issue_reaction(owner: str, repo: str, issue_number: int, content: str) -> str:
+        github.reactions.setdefault(issue_number, []).append(
+            {"id": 99, "user": {"login": "tester"}, "content": content}
+        )
+        return "ok"
+
+    @server.tool(name="remove_issue_reaction", annotations=ANNOTATIONS)
+    def remove_issue_reaction(owner: str, repo: str, issue_number: int, content: str) -> str:
+        github.reactions[issue_number] = []
+        return "ok"
+
     return server
 
 
@@ -122,13 +137,13 @@ def pack_for(tool: str) -> Pack:
                     "owner": "{repo.owner}",
                     "repo": "{repo.name}",
                     "issue_number": "{fixture.issue_number}",
-                    "labels": ["a"],
+                    **({"content": "+1"} if "reaction" in tool else {"labels": ["a"]}),
                 },
                 argument_roles={
                     "owner": "owner",
                     "repo": "repository",
                     "issue_number": "id",
-                    "labels": "content",
+                    **({"content": "content"} if "reaction" in tool else {"labels": "content"}),
                 },
                 fields=[
                     FieldSpec("issue.labels", FieldKind.COLLECTION),
@@ -136,15 +151,18 @@ def pack_for(tool: str) -> Pack:
                     FieldSpec("issue.title", FieldKind.SCALAR),
                     FieldSpec("issue.body", FieldKind.SCALAR),
                     FieldSpec("issue.state", FieldKind.SCALAR),
+                    FieldSpec("issue.reaction_set", FieldKind.COLLECTION),
                 ],
-                supplies={"issue.labels": "labels"},
+                supplies={} if "reaction" in tool else {"issue.labels": "labels"},
             )
         },
     )
 
 
-async def judged(tool: str):
+async def judged(tool: str, reactions: list[dict] | None = None):
     github = FakeGitHub()
+    if reactions:
+        github.reactions[1] = reactions
     rest = GitHubRest("dummy-token-value", transport=httpx.MockTransport(github.handler))
     async with Client(build(github)) as client:
         _, results = await run(
@@ -174,6 +192,19 @@ async def test_add_issue_labels_is_a_pass():
     assert result.outcome is Outcome.PASS
     names = {x["name"] for x in github.issues[1]["labels"]}
     assert {"a", "c", "d"} <= names  # the labels actually grew
+
+
+async def test_add_reaction_is_a_pass_on_the_reaction_set():
+    verdict, result, github = await judged("add_issue_reaction")
+    assert verdict.outcome is Outcome.PASS
+    assert github.reactions[1]
+
+
+async def test_removing_a_reaction_is_a_finding():
+    existing = [{"id": 5, "user": {"login": "bob"}, "content": "heart"}]
+    verdict, result, _ = await judged("remove_issue_reaction", existing)
+    assert verdict.outcome is Outcome.FINDING
+    assert "issue.reaction_set" in verdict.changed
 
 
 def test_issue_labels_is_not_composite():

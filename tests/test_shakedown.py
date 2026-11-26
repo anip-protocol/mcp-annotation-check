@@ -260,3 +260,62 @@ def test_shakedown_cli_client_may_write_nowhere(monkeypatch, tmp_path):
     assert seen["write_repositories"] is not None
     assert list(seen["write_repositories"]) == []
     assert seen["closed"] is True
+
+
+async def test_shakedown_json_records_annotations_and_claim_counts(tmp_path):
+    from mcp.server.mcpserver import MCPServer
+    from mcp.types import ToolAnnotations
+
+    server = MCPServer("s")
+
+    @server.tool(name="a", annotations=ToolAnnotations(read_only_hint=True, open_world_hint=True))
+    def a() -> str:
+        return ""
+
+    @server.tool(
+        name="b",
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=False, idempotent_hint=True
+        ),
+    )
+    def b() -> str:
+        return ""
+
+    @server.tool(
+        name="c",
+        annotations=ToolAnnotations(
+            read_only_hint=False, destructive_hint=True, idempotent_hint=False
+        ),
+    )
+    def c() -> str:
+        return ""
+
+    @server.tool(name="d")
+    def d() -> str:
+        return ""
+
+    @asynccontextmanager
+    async def open_client():
+        async with Client(server) as client:
+            yield client
+
+    pack = pack_for_github()
+    rest = make_rest([])
+    try:
+        await shakedown(
+            open_client, rest, SpyReader(rest, pack.repositories), pack, TOKEN, LOGIN,
+            {"image": "img"}, tmp_path,
+        )
+    finally:
+        await rest.aclose()
+    report = json.loads((tmp_path / "shakedown.json").read_text())
+    ann = report["tool_annotations"]
+    assert ann["a"] == {"readOnlyHint": True, "openWorldHint": True}
+    assert ann["b"] == {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True}
+    assert ann["c"]["destructiveHint"] is True
+    assert ann["d"] == {}
+    assert report["claim_counts"] == {
+        "readOnlyHint_true": 1,
+        "destructiveHint_false_not_read_only": 1,
+        "idempotentHint_true_not_read_only": 1,
+    }

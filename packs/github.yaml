@@ -43,7 +43,15 @@ tools:
       issue_number: "{fixture.issue_number}"
       content: "+1"
     argument_roles: {owner: owner, repo: repository, issue_number: id, content: content}
-    fields: *issue_fields
+    # The reaction set, not the issue's reaction count: a count going 0 -> 1 is a
+    # scalar change and would read as a loss.
+    fields:
+      - {path: issue.labels, kind: collection}
+      - {path: issue.assignees, kind: collection}
+      - {path: issue.title, kind: scalar}
+      - {path: issue.body, kind: scalar}
+      - {path: issue.state, kind: scalar}
+      - {path: issue.reaction_set, kind: collection}
   # Control: claims destructiveHint: false and overwrites a single value the caller
   # supplied. Expected: OBSERVATION, not FINDING.
   update_issue_title:

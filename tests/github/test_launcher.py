@@ -50,6 +50,46 @@ def test_image_digest_uses_docker_inspect(monkeypatch):
     assert "{{index .RepoDigests 0}}" in calls[0]
 
 
+def test_image_pulled_when_missing(monkeypatch):
+    calls = []
+    inspected = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw))
+        if cmd[:3] == ["docker", "image", "inspect"]:
+            inspected.append(1)
+            if len(inspected) == 1:
+                raise subprocess.CalledProcessError(1, cmd, stderr="No such image")
+            return subprocess.CompletedProcess(cmd, 0, stdout="img@sha256:abc\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setenv(ENV, TOKEN)
+    monkeypatch.setenv("DOCKER_HOST", "unix:///x.sock")
+    monkeypatch.setattr(launcher.subprocess, "run", fake_run)
+    assert launcher.image_digest("img:1") == "img@sha256:abc"
+    kinds = [c[0][:2] for c in calls]
+    assert kinds == [["docker", "image"], ["docker", "pull"], ["docker", "image"]]
+    pull_cmd, pull_kw = calls[1]
+    assert pull_cmd == ["docker", "pull", "img:1"]
+    assert TOKEN not in " ".join(pull_cmd)
+    env = pull_kw.get("env")
+    assert env is None or (env.get("DOCKER_HOST") == "unix:///x.sock" and TOKEN not in env.values())
+
+
+def test_failed_pull_raises_redacted(monkeypatch):
+    def fake_run(cmd, **kw):
+        if cmd[:2] == ["docker", "pull"]:
+            raise subprocess.CalledProcessError(1, cmd, stderr=f"denied: bad token {TOKEN}")
+        raise subprocess.CalledProcessError(1, cmd, stderr="No such image")
+
+    monkeypatch.setenv(ENV, TOKEN)
+    monkeypatch.setattr(launcher.subprocess, "run", fake_run)
+    with pytest.raises(RuntimeError) as err:
+        launcher.image_digest("img:1")
+    assert "denied" in str(err.value)
+    assert TOKEN not in str(err.value)
+
+
 def _run_args(tmp_path):
     return [
         "run", "--pack", "packs/fake.yaml", "--image", "img:1", "--toolsets", "default",
