@@ -109,4 +109,4 @@ Every finding starts as `unreviewed`. The harness never publishes. Nothing is pu
 
 1. Complete the owner prerequisites and run the pending checks in [docs/verification.md](docs/verification.md).
 2. Write `packs/github.yaml`, then run the label reproduction and the sweep.
-3. Follow up on the discussion in #10, and run the fix check on a fixed image: the live label test with the fixed image tag should give PASS.
+3. Follow up on the discussion in #10, and run the fix check on a fixed image. The fix sets `destructiveHint: true` on the label tools, and a `true` destructive claim is not tested, so the live label test with the fixed image tag should give SKIPPED with "no explicit claim": the claim was corrected, not shown to hold. (If the fixed tool also claims `idempotentHint: true`, that check runs and its own outcome is reported instead.)
