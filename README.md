@@ -57,6 +57,18 @@ Runs the harness against the built-in fake server, whose annotations are wrong o
 mcp-annotation-check self-test --out out/self-test
 ```
 
+### `shakedown`
+
+The first live step. Runs the preflight, starts GitHub's MCP server in Docker, reads `tools/list`, validates the pack against it and takes one read-only snapshot of the read repository. It never calls a tool, never creates or cleans up a fixture and sends only GET requests, so run it with a read-only token first, then again with the read-write token. It takes the same options as `run` (without the settle options), and the token comes only from the environment.
+
+```
+export MCP_ANNOTATION_CHECK_GITHUB_TOKEN=<fine-grained token>
+mcp-annotation-check shakedown --pack packs/github.yaml --login <test-account> \
+  --image ghcr.io/github/github-mcp-server:<tag> --toolsets default --out out/shakedown
+```
+
+`out/shakedown.json` records the image and digest, server info, protocol version, the `tools/list` hash and tool names, pack validation problems and warnings, the snapshot's field names (not values) and pass or fail per step; a failed step marks the later ones "not run". The token never appears in it. Exit code 0 only when every step passed and there are no validation problems. A read-only token proves the preflight, launcher and reader work with no write possible; real verdicts need the read-write token, because a mislabelled tool would just fail on permission.
+
 ### `list-tools`
 
 Starts GitHub's MCP server in Docker and writes its `tools/list` to JSON. Needs the token.

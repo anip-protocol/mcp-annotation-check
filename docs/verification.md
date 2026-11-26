@@ -99,6 +99,23 @@ For `/user/orgs` and `/user/repos?affiliation=owner` (preflight step 4):
 _Pending. Record here: the date, which result above was seen for each endpoint, and the
 printed lines._
 
+## Pending: shakedown (the first live step)
+
+Run `shakedown` before anything else live, first with a read-only token, then with the
+read-write token. It makes no write of any kind (no tool call, no fixture, only GET requests).
+
+```
+export MCP_ANNOTATION_CHECK_GITHUB_TOKEN=<read-only fine-grained token>
+mcp-annotation-check shakedown --pack packs/github.yaml --login <test-account> \
+  --image ghcr.io/github/github-mcp-server:<tag> --toolsets default --out out/shakedown-ro
+# then, with the read-write token:
+mcp-annotation-check shakedown ... --out out/shakedown-rw
+```
+
+Expected: exit 0 and every step `passed` in `shakedown.json`. A read-only token cannot
+give real verdicts (a mislabelled tool would just fail on permission), so the sweep
+itself needs the read-write token, after both shakedowns pass.
+
 ## Pending: GitHub server launch flags
 
 Not yet run: it needs the owner's token and test organization, which do not exist yet.

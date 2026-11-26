@@ -7,7 +7,8 @@ import logging
 import os
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
 
 from mcp import Client
@@ -18,7 +19,7 @@ from mcp_annotation_check.github.launcher import TOKEN_ENV, image_digest, server
 from mcp_annotation_check.github.reader import GitHubReader
 from mcp_annotation_check.github.rest import GitHubRest
 from mcp_annotation_check.github.safety import make_before_call, preflight
-from mcp_annotation_check.pack import load_pack
+from mcp_annotation_check.pack import Pack, load_pack, pack_warnings, validate_pack
 from mcp_annotation_check.redact import redact
 from mcp_annotation_check.report import (
     PUBLISH_BLOCKED,
@@ -27,7 +28,7 @@ from mcp_annotation_check.report import (
     ToolResult,
     write_reports,
 )
-from mcp_annotation_check.runner import list_all_tools, run
+from mcp_annotation_check.runner import list_all_tools, run, tools_list_digest
 
 FAKE_PACK = Path(__file__).resolve().parents[2] / "packs" / "fake.yaml"
 
@@ -150,6 +151,132 @@ async def _run_github(
         await rest.aclose()
 
 
+SHAKEDOWN_STEPS = ("preflight", "start", "tools_list", "validate", "snapshot")
+
+
+async def shakedown(
+    open_client: Callable[[], AbstractAsyncContextManager[Client]],
+    rest: GitHubRest,
+    reader: GitHubReader,
+    pack: Pack,
+    token: str,
+    login: str,
+    context: dict,
+    out: Path,
+) -> bool:
+    """Preflight, start the server, tools/list, validate the pack, one read-only snapshot.
+
+    Never calls a tool, creates or cleans up a fixture, or sends a non-GET request. Each
+    step's outcome goes to out/shakedown.json (a failed step marks the later ones "not
+    run"); the file is redacted. True only if every step passed with no validation problems.
+    """
+    secrets = [token]
+    steps: dict[str, dict] = {n: {"status": "not run", "passed": False} for n in SHAKEDOWN_STEPS}
+    report: dict = {
+        "image": context.get("image"),
+        "image_digest": context.get("image_digest"),
+        "toolsets": context.get("toolsets", []),
+        "features": context.get("features", []),
+        "server_info": None,
+        "protocol_version": None,
+        "tools_list_sha256": None,
+        "tool_names": [],
+        "validation_problems": [],
+        "validation_warnings": pack_warnings(pack),
+        "snapshot_fields": [],
+        "steps": steps,
+    }
+
+    def passed(name: str) -> None:
+        steps[name] = {"status": "passed", "passed": True}
+
+    def failed(name: str, error: BaseException) -> None:
+        text = "\n".join(_causes(error))
+        steps[name] = {"status": "failed", "passed": False, "error": redact(text, secrets)}
+
+    try:
+        try:
+            report["preflight"] = await preflight(rest, token, pack, login)
+        except Exception as error:  # noqa: BLE001 - recorded, not raised
+            failed("preflight", error)
+        else:
+            passed("preflight")
+            await _shakedown_server(open_client, reader, pack, report, passed, failed)
+    finally:
+        text = redact(json.dumps(report, indent=2, sort_keys=True, default=str), secrets)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "shakedown.json").write_text(text + "\n")
+    return all(s["passed"] for s in steps.values()) and not report["validation_problems"]
+
+
+async def _shakedown_server(open_client, reader, pack, report, passed, failed) -> None:
+    started = False
+    try:
+        async with open_client() as client:
+            started = True
+            passed("start")
+            info = client.server_info
+            report["server_info"] = (
+                info.model_dump(mode="json", by_alias=True, exclude_none=True) if info else {}
+            )
+            report["protocol_version"] = client.protocol_version
+            try:
+                tools = await list_all_tools(client)
+            except Exception as error:  # noqa: BLE001
+                failed("tools_list", error)
+                return
+            listing = [t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in tools]
+            report["tool_names"] = sorted(t.name for t in tools)
+            report["tools_list_sha256"] = tools_list_digest(listing)
+            passed("tools_list")
+            try:
+                problems = validate_pack(pack, tools)
+            except Exception as error:  # noqa: BLE001
+                failed("validate", error)
+            else:
+                report["validation_problems"] = problems
+                if problems:
+                    failed("validate", RuntimeError(f"{len(problems)} pack validation problem(s)"))
+                else:
+                    passed("validate")
+            try:
+                fixture = {"repository": pack.repositories["read"]}
+                recorded = await reader.snapshot(pack.standard_read_only_fields, fixture)
+                report["snapshot_fields"] = sorted(recorded.snapshot)
+            except Exception as error:  # noqa: BLE001
+                failed("snapshot", error)
+            else:
+                passed("snapshot")
+    except Exception as error:  # noqa: BLE001 - the server failed to start, or to stop
+        failed("start" if not started else "shutdown", error)
+
+
+async def _shakedown_github(args: argparse.Namespace, token: str) -> bool:
+    pack = load_pack(args.pack)
+    rest = GitHubRest(token)
+    toolsets, features = _split(args.toolsets), _split(args.features)
+    try:
+        context = {
+            "image": args.image,
+            "image_digest": image_digest(args.image),
+            "toolsets": toolsets,
+            "features": features,
+        }
+        params = server_params(args.image, toolsets, features)
+        return await shakedown(
+            lambda: Client(params),
+            rest,
+            GitHubReader(rest, pack.repositories),
+            pack,
+            token,
+            args.login,
+            context,
+            args.out,
+        )
+    finally:
+        await rest.aclose()
+
+
 async def _list_tools(args: argparse.Namespace) -> int:
     params = server_params(args.image, _split(args.toolsets), _split(args.features))
     async with Client(params) as client:
@@ -189,12 +316,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_p.add_argument("--out", type=Path, required=True)
     run_p.add_argument("--settle-interval", type=float, default=1.0)
     run_p.add_argument("--settle-timeout", type=float, default=20.0)
+    sd = sub.add_parser(
+        "shakedown",
+        help="preflight, tools/list, pack validation and one snapshot; no tool calls, no writes",
+    )
+    sd.add_argument("--pack", type=Path, required=True)
+    sd.add_argument("--image", required=True)
+    sd.add_argument("--toolsets", required=True, help="comma-separated")
+    sd.add_argument("--features", default="", help="comma-separated")
+    sd.add_argument("--login", required=True, help="expected test-account login")
+    sd.add_argument("--out", type=Path, required=True)
     lt = sub.add_parser("list-tools", help="write the server's tools/list to JSON")
     lt.add_argument("--image", required=True)
     lt.add_argument("--toolsets", required=True, help="comma-separated")
     lt.add_argument("--features", default="", help="comma-separated")
     lt.add_argument("--out", type=Path, required=True)
     args = parser.parse_args(argv)
+
+    if args.command == "shakedown":
+        token = None
+        try:
+            token = _token()
+            ok = asyncio.run(_shakedown_github(args, token))
+        except KeyboardInterrupt:
+            print("interrupted", file=sys.stderr)
+            return 130
+        except BaseException as error:  # noqa: BLE001
+            return _fail(error, token)
+        print(args.out / "shakedown.json")
+        print("shakedown passed" if ok else "shakedown FAILED (see shakedown.json)")
+        return 0 if ok else 1
 
     if args.command in ("run", "list-tools"):
         token = None

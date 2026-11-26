@@ -164,6 +164,11 @@ async def list_all_tools(client: Client) -> list[Tool]:
             return tools
 
 
+def tools_list_digest(tools_list: list[dict[str, Any]]) -> str:
+    canonical = json.dumps(tools_list, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
 def _header(
     client: Client,
     pack: Pack,
@@ -173,7 +178,6 @@ def _header(
     warnings: list[str],
 ) -> RunHeader:
     tools_list = [t.model_dump(mode="json", by_alias=True, exclude_none=True) for t in listed]
-    canonical = json.dumps(tools_list, sort_keys=True, separators=(",", ":"))
     info = client.server_info
     return RunHeader(
         server_info=info.model_dump(mode="json", by_alias=True, exclude_none=True) if info else {},
@@ -188,7 +192,7 @@ def _header(
         features=list(context.get("features") or []),
         date=datetime.now(UTC).isoformat(timespec="seconds"),
         tools_list=tools_list,
-        tools_list_sha256=hashlib.sha256(canonical.encode()).hexdigest(),
+        tools_list_sha256=tools_list_digest(tools_list),
         standard_read_only_fields=[f.path for f in pack.standard_read_only_fields],
         pack_problems=problems,
         pack_warnings=warnings,
