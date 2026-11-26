@@ -14,7 +14,8 @@ other: a change against the claim is a FINDING (or OBSERVATION), but with no suc
 change the tool is an ERROR ("call failed; no change observed in ..."), never a PASS.
 A non-destructive check over composite fields (snapshot.COMPOSITE_FIELDS) is UNJUDGED
 unless its plain fields show a FINDING; a FINDING outranks every other outcome.
-A failure at any step is an ERROR for that tool only, with one exception: a refusal
+A failure at any step is an ERROR for that tool only (unless a FINDING was already
+recorded, which stays a FINDING), with one exception: a refusal
 by `before_call` (the per-call safety check) stops the run. The refused tool is an
 ERROR and every remaining tool is SKIPPED with "run stopped after a safety refusal
 on <tool>"; the results are still returned so the reports can be written. Any
@@ -352,7 +353,13 @@ class _ToolCheck:
                     await self.reader.cleanup(self.entry, self.fixture)
                 except Exception as e:
                     self.errors.append(self._redact(f"cleanup failed: {type(e).__name__}: {e}"))
-        outcome = Outcome.ERROR if failed else _most_severe(self.verdicts)
+        if failed:
+            # A FINDING already recorded outranks the later failure (Amendment 1); the
+            # error text stays on the result either way.
+            found = any(v.outcome is Outcome.FINDING for v in self.verdicts)
+            outcome = Outcome.FINDING if found else Outcome.ERROR
+        else:
+            outcome = _most_severe(self.verdicts)
         if not failed and self.call_failed and not any(
             v.outcome in (Outcome.FINDING, Outcome.OBSERVATION) for v in self.verdicts
         ):

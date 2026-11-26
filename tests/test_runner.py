@@ -839,3 +839,36 @@ async def test_read_only_check_still_uses_composite_fields():
     assert "issue.comments" in got["get_issue"].verdicts[0].detail
     assert got["peek_and_touch"].outcome is Outcome.FINDING
     assert "issue.comments" in got["peek_and_touch"].verdicts[0].changed
+
+
+async def test_finding_survives_a_failed_later_step():
+    from mcp_annotation_check.github.safety import SafetyRefusal
+
+    store = FakeStore()
+    server = build_fake_server(store)
+
+    @server.tool(
+        name="replace_labels",
+        annotations=ToolAnnotations(destructive_hint=False, idempotent_hint=True),
+    )
+    def replace_labels(issue_id: str, labels: list[str]) -> str:
+        store.issues[issue_id].labels = list(labels)
+        return "ok"
+
+    seen: list[str] = []
+
+    async def before_call(tool: str, arguments: dict) -> None:
+        seen.append(tool)
+        if tool == "replace_labels" and seen.count("replace_labels") == 2:
+            raise SafetyRefusal("refused on the second call")
+
+    template = load_pack(FAKE_PACK).entries["set_labels"]
+    pack = with_entries(load_pack(FAKE_PACK), replace_labels=replace(template, tool="replace_labels"))
+    _, results = await run_fake(pack=pack, store=store, server=server, before_call=before_call)
+    got = by_tool(results)["replace_labels"]
+    assert any(v.outcome is Outcome.FINDING for v in got.verdicts)
+    assert got.outcome is Outcome.FINDING
+    assert "refused on the second call" in got.error  # the error text is kept
+    names = [r.tool for r in results]
+    for name in names[names.index("replace_labels") + 1 :]:  # a refusal still stops the run
+        assert by_tool(results)[name].outcome is Outcome.SKIPPED

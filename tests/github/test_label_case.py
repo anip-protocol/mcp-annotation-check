@@ -157,18 +157,23 @@ async def judged(tool: str):
         )
     result = next(r for r in results if r.tool == tool)
     assert result.error is None, result.error
-    return next(v for v in result.verdicts if v.check is Check.NON_DESTRUCTIVE)
+    verdict = next(v for v in result.verdicts if v.check is Check.NON_DESTRUCTIVE)
+    return verdict, result, github
 
 
 async def test_update_issue_labels_replacing_is_a_finding():
-    verdict = await judged("update_issue_labels")
+    verdict, result, _ = await judged("update_issue_labels")
     assert verdict.outcome is Outcome.FINDING
+    assert result.outcome is Outcome.FINDING
     assert verdict.changed["issue.labels"] == (frozenset({"c", "d"}), frozenset({"a"}))
 
 
 async def test_add_issue_labels_is_a_pass():
-    verdict = await judged("add_issue_labels")
+    verdict, result, github = await judged("add_issue_labels")
     assert verdict.outcome is Outcome.PASS
+    assert result.outcome is Outcome.PASS
+    names = {x["name"] for x in github.issues[1]["labels"]}
+    assert {"a", "c", "d"} <= names  # the labels actually grew
 
 
 def test_issue_labels_is_not_composite():
