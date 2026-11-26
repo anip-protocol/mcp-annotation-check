@@ -186,3 +186,40 @@ def test_github_url_any_case_rejected(tmp_path):
     p = write_pack(tmp_path, '  t1:\n    arguments: {body: "GitHub.com/owner/repo"}\n')
     with pytest.raises(PackError, match="t1"):
         load_pack(p)
+
+
+def _pack_text(allowlist: str, repositories: str) -> str:
+    return (
+        f"server: fake\nversion: '1'\nallowlist: {allowlist}\n"
+        f"repositories: {repositories}\ntools: {{}}\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "allowlist",
+    ["test-org", "[1, 2]", "[[test-org]]", "{test-org: 1}", "['teſt-org']", "['a b']"],
+)
+def test_allowlist_must_be_a_list_of_owner_names(tmp_path, allowlist):
+    p = tmp_path / "pack.yaml"
+    p.write_text(_pack_text(allowlist, "{write: o/w}"))
+    with pytest.raises(PackError, match="allowlist"):
+        load_pack(p)
+
+
+@pytest.mark.parametrize(
+    "repositories",
+    ["o/w", "[o/w]", "{write: 5}", "{write: o}", "{write: o/w/x}", "{write: /w}", "{1: o/w}"],
+)
+def test_repositories_must_map_names_to_owner_slash_name(tmp_path, repositories):
+    p = tmp_path / "pack.yaml"
+    p.write_text(_pack_text("[o]", repositories))
+    with pytest.raises(PackError, match="repositories"):
+        load_pack(p)
+
+
+def test_valid_allowlist_and_repositories_load(tmp_path):
+    p = tmp_path / "pack.yaml"
+    p.write_text(_pack_text("[test-org, Test.Account_2]", "{write: test-org/w, read: test-org/r}"))
+    pack = load_pack(p)
+    assert pack.allowlist == ["test-org", "Test.Account_2"]
+    assert pack.repositories == {"write": "test-org/w", "read": "test-org/r"}

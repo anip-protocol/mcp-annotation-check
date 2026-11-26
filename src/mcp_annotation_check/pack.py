@@ -3,9 +3,9 @@
 Top-level keys:
   server, version      strings
   allowlist            list of GitHub owners (the test organization, and the test
-                       account if needed) the harness may act on; compared
-                       case-insensitively by the safety checks
-  repositories         map name -> "owner/name" (names used: "read", "write")
+                       account if needed) the harness may act on, as ASCII names;
+                       compared case-insensitively by the safety checks
+  repositories         map name -> "owner/name", ASCII (names used: "read", "write")
   standard_read_only_fields   list of {path, kind} compared for read-only tools
   id_only_write_tools  list of tool names (default empty)
   read_fixtures        map of fixture values for read-repository entries
@@ -34,6 +34,8 @@ from mcp_annotation_check.snapshot import FieldKind, FieldSpec
 _MENTION = re.compile(r"(?<![\w.])@[A-Za-z0-9-]+")
 _XREF = re.compile(r"[\w.-]+/[\w.-]+#\d+")
 _PLACEHOLDER = re.compile(r"\{(fixture\.[\w]+|repo\.owner|repo\.name)\}")
+_OWNER = re.compile(r"[A-Za-z0-9_.-]+")  # ASCII only, as the safety checks require
+_FULL_NAME = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
 class PackError(Exception):
@@ -136,6 +138,30 @@ def _entry(tool: str, raw: dict[str, Any]) -> ToolEntry:
     )
 
 
+def _allowlist(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise PackError(f"allowlist must be a list of owner names, not {type(raw).__name__}")
+    for owner in raw:
+        if not isinstance(owner, str) or not _OWNER.fullmatch(owner):
+            raise PackError(f"allowlist entry {owner!r} is not an ASCII owner name")
+    return list(raw)
+
+
+def _repositories(raw: Any) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise PackError(f"repositories must be a mapping, not {type(raw).__name__}")
+    for name, full_name in raw.items():
+        if not isinstance(name, str):
+            raise PackError(f"repositories key {name!r} is not a string")
+        if not isinstance(full_name, str) or not _FULL_NAME.fullmatch(full_name):
+            raise PackError(f"repositories[{name!r}] = {full_name!r} is not \"owner/name\"")
+    return dict(raw)
+
+
 def load_pack(path: Path) -> Pack:
     try:
         raw = yaml.safe_load(Path(path).read_text())
@@ -153,8 +179,8 @@ def load_pack(path: Path) -> Pack:
     return Pack(
         server=server,
         version=version,
-        allowlist=list(raw.get("allowlist") or []),
-        repositories=dict(raw.get("repositories") or {}),
+        allowlist=_allowlist(raw.get("allowlist")),
+        repositories=_repositories(raw.get("repositories")),
         standard_read_only_fields=_fields(raw.get("standard_read_only_fields"), "pack"),
         entries={name: _entry(name, body) for name, body in tools.items()},
         id_only_write_tools=list(raw.get("id_only_write_tools") or []),
