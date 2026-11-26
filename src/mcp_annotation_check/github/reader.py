@@ -75,6 +75,15 @@ class GitHubReader:
         issue = await self.rest.post(f"/repos/{repo}/issues", body)
         state["issue_number"] = issue["number"]
         fixture["issue_number"] = issue["number"]
+        if name == "issue_with_assignee":
+            # GitHub answers 201 and silently drops an assignee it can't assign. An
+            # empty start would make a replacing tool look non-destructive.
+            assigned = [a.get("login") for a in issue.get("assignees") or []]
+            if fixture["assignee"] not in assigned:
+                raise RuntimeError(
+                    f"fixture setup: {fixture['assignee']} was not assigned to issue "
+                    f"#{issue['number']}; GitHub dropped the assignee"
+                )
         if name == "issue_with_comment":
             comment = await self.rest.post(
                 f"/repos/{repo}/issues/{issue['number']}/comments", {"body": "fixture comment"}

@@ -158,7 +158,7 @@ async def test_issue_with_assignee_assigns_the_token_account():
         if request.method == "GET" and request.url.path == "/user":
             return httpx.Response(200, json={"login": "bot"})
         if request.url.path.endswith("/issues"):
-            return httpx.Response(201, json={"number": 7})
+            return httpx.Response(201, json={"number": 7, "assignees": [{"login": "bot"}]})
         return httpx.Response(200, json={})
 
     reader, calls = make(handler)
@@ -171,6 +171,21 @@ async def test_issue_with_assignee_assigns_the_token_account():
             {"title": "mac-abc-update_issue_assignees", "body": "fixture", "assignees": ["bot"]},
         )
     ]
+
+
+async def test_issue_with_assignee_fails_when_github_drops_the_assignee():
+    # GitHub answers 201 and silently drops an assignee it can't assign; the fixture
+    # would then start empty and a replacing tool would look non-destructive.
+    def handler(request):
+        if request.method == "GET" and request.url.path == "/user":
+            return httpx.Response(200, json={"login": "bot"})
+        if request.url.path.endswith("/issues"):
+            return httpx.Response(201, json={"number": 7, "assignees": []})
+        return httpx.Response(200, json={})
+
+    reader, _ = make(handler)
+    with pytest.raises(RuntimeError, match="not assigned"):
+        await reader.create_fixture(entry("issue_with_assignee", "update_issue_assignees"), "abc")
 
 
 async def test_missing_labels_are_created():
