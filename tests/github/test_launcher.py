@@ -394,3 +394,25 @@ def test_run_exits_2_when_the_rest_guard_refuses_a_fixture_write(monkeypatch, tm
         assert results[tool]["outcome"] == "skipped"
         assert results[tool]["skip_reason"] == "run stopped after a safety refusal on set_labels"
     assert TOKEN not in capsys.readouterr().out
+
+
+def test_docker_subprocesses_get_no_token(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw))
+        if cmd[:3] == ["docker", "image", "inspect"] and sum(c[0][:2] == cmd[:2] for c in calls) == 1:
+            raise subprocess.CalledProcessError(1, cmd, stderr="No such image")
+        return subprocess.CompletedProcess(cmd, 0, stdout="img@sha256:abc\n", stderr="")
+
+    monkeypatch.setenv(ENV, TOKEN)
+    monkeypatch.setenv("DOCKER_HOST", "unix:///x.sock")
+    monkeypatch.setenv("UNRELATED", "x")
+    monkeypatch.setattr(launcher.subprocess, "run", fake_run)
+    launcher.image_digest("img:1")
+    assert [c[0][1] for c in calls] == ["image", "pull", "image"]
+    for _, kw in calls:
+        env = kw["env"]
+        assert ENV not in env and TOKEN not in env.values()
+        assert "UNRELATED" not in env
+        assert env["DOCKER_HOST"] == "unix:///x.sock" and "PATH" in env

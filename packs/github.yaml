@@ -1,18 +1,41 @@
-# GitHub's MCP server (github/github-mcp-server), starter pack.
+# GitHub's MCP server (github/github-mcp-server), checked at v2.3.0 with
+# --toolsets default --features issues_granular (tests/data/tools-v2.3.0.json).
 # Milestone 1: the label reproduction (github/github-mcp-server#3760) plus two
-# controls on the same fixture. The curated sweep is added after the first real
-# tools/list (docs/verification.md).
+# controls on the same fixture. Sweep round 1: every testable read-only tool,
+# update_issue_body and update_issue_state; the other destructiveHint: false tools
+# wait for round 2.
 server: github-mcp-server
 version: "0.1"
 allowlist: [mcp-annotation-check-lab]
 repositories:
   write: mcp-annotation-check-lab/write-fixture
   read: mcp-annotation-check-lab/read-fixtures
-# Repository-level state only, so the shakedown needs no fixed issue yet.
+# Objects the owner created by hand in the read repository (docs/verification.md,
+# "Sweep round 1"); read entries with no fixture take their values from here.
+read_fixtures:
+  issue_number: 1      # "read fixture issue", label fixture-label, one comment
+  pr_number: 2         # from branch fixture-branch
+  label_name: fixture-label
+  tag: v0.0.1          # release and tag on main
+  ref: v0.0.1
+  path: README.md      # on main
+# Compared for every read-only tool: the read repository's state, and its fixed issue
+# and pull request.
 standard_read_only_fields:
   - {path: repo.labels, kind: collection}
   - {path: repo.refs, kind: collection}
   - {path: repo.issues, kind: collection}
+  - {path: issue.comments, kind: collection}
+  - {path: issue.reactions, kind: scalar}
+  - {path: issue.body, kind: scalar}
+  - {path: issue.assignees, kind: collection}
+  - {path: pr.state, kind: scalar}
+  - {path: pr.title, kind: scalar}
+  - {path: pr.body, kind: scalar}
+  - {path: pr.requested_reviewers, kind: collection}
+# These name no repository by design: get_me takes no arguments, the searches only a
+# query (scoped to the read repository where the tool searches its content).
+no_target_tools: [get_me, search_code, search_commits, search_repositories, search_users]
 tools:
   # Claims destructiveHint: false, but replaces the issue's labels.
   # Expected: FINDING (labels c and d lost).
@@ -79,3 +102,317 @@ tools:
       assignees: []
     argument_roles: {owner: owner, repo: repository, issue_number: id, assignees: content}
     fields: *issue_fields
+
+  # --- Sweep round 1: write tools ------------------------------------------------
+  # Claims destructiveHint: false and overwrites the single value the caller supplied.
+  # Expected: OBSERVATION (issue.body replaced by the supplied body), not FINDING.
+  update_issue_body:
+    fixture: plain_issue
+    repository: write
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      issue_number: "{fixture.issue_number}"
+      body: mcp-annotation-check new body
+    argument_roles: {owner: owner, repo: repository, issue_number: id, body: content}
+    fields: *issue_fields
+    supplies: {issue.body: body}
+  # Claims destructiveHint: false and sets the state the caller supplied (open ->
+  # closed). Expected: OBSERVATION, not FINDING. The optional confidence, rationale
+  # and suggestion arguments are not passed, so the change is applied, not proposed.
+  update_issue_state:
+    fixture: plain_issue
+    repository: write
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      issue_number: "{fixture.issue_number}"
+      state: closed
+    argument_roles:
+      owner: owner
+      repo: repository
+      issue_number: id
+      state: other
+      state_reason: other
+      duplicate_of: id  # an issue number; not passed
+      confidence: other
+      is_suggestion: other
+      rationale: content
+    fields: *issue_fields
+    supplies: {issue.state: state}
+
+  # --- Sweep round 1: read-only tools ----------------------------------------------
+  # Every tool claiming readOnlyHint: true, called once against the read repository
+  # (no fixture: IDs come from read_fixtures). Expected: PASS (nothing in the
+  # standard read-only fields changes). Optional arguments are declared, not passed.
+  get_commit:
+    repository: read
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      # "Commit SHA, branch name, or tag name": the tag is a valid commit ref. Declared
+      # other, not id: the name is not ID-like, and the call safety check only accepts
+      # IDs of letters, digits, _ and -, which "v0.0.1" is not.
+      sha: "{fixture.ref}"
+    argument_roles: {owner: owner, repo: repository, sha: other, detail: other, page: other, perPage: other}
+  get_file_contents:
+    repository: read
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      path: "{fixture.path}"  # README.md on the default branch (main): ref not needed
+    argument_roles:
+      owner: owner
+      repo: repository
+      path: other
+      ref: other
+      sha: id  # a commit SHA only; not passed
+      fields: content
+  get_label:
+    repository: read
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      name: "{fixture.label_name}"
+    argument_roles: {owner: owner, repo: repository, name: other}
+  get_latest_release:
+    repository: read
+    arguments: {owner: "{repo.owner}", repo: "{repo.name}"}
+    argument_roles: {owner: owner, repo: repository}
+  # No arguments at all: on no_target_tools.
+  get_me:
+    repository: read
+    arguments: {}
+    argument_roles: {}
+  get_release_by_tag:
+    repository: read
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      tag: "{fixture.tag}"
+    argument_roles: {owner: owner, repo: repository, tag: other}
+  get_tag:
+    repository: read
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      tag: "{fixture.tag}"
+    argument_roles: {owner: owner, repo: repository, tag: other}
+  issue_read:
+    repository: read
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      issue_number: "{fixture.issue_number}"
+      method: get
+    argument_roles:
+      owner: owner
+      repo: repository
+      issue_number: id
+      method: other
+      page: other
+      perPage: other
+  list_branches:
+    repository: read
+    arguments: {owner: "{repo.owner}", repo: "{repo.name}"}
+    argument_roles: {owner: owner, repo: repository, page: other, perPage: other}
+  list_commits:
+    repository: read
+    arguments: {owner: "{repo.owner}", repo: "{repo.name}"}
+    argument_roles:
+      owner: owner
+      repo: repository
+      sha: other  # "Commit SHA, branch or tag name"; not passed (default branch)
+      author: other
+      path: other
+      since: other
+      until: other
+      fields: content
+      page: other
+      perPage: other
+  # repo is optional (without it the tool lists the organization's fields); passed so
+  # the call stays on the read repository.
+  list_issue_fields:
+    repository: read
+    arguments: {owner: "{repo.owner}", repo: "{repo.name}"}
+    argument_roles: {owner: owner, repo: repository}
+  # repo passed for the same reason as list_issue_fields.
+  list_issue_types:
+    repository: read
+    arguments: {owner: "{repo.owner}", repo: "{repo.name}"}
+    argument_roles: {owner: owner, repo: repository}
+  list_issues:
+    repository: read
+    arguments: {owner: "{repo.owner}", repo: "{repo.name}"}
+    argument_roles:
+      owner: owner
+      repo: repository
+      after: other
+      direction: other
+      field_filters: content
+      fields: content
+      labels: content
+      orderBy: other
+      perPage: other
+      since: other
+      state: other
+  list_pull_requests:
+    repository: read
+    arguments: {owner: "{repo.owner}", repo: "{repo.name}"}
+    argument_roles:
+      owner: owner
+      repo: repository
+      base: other
+      direction: other
+      fields: content
+      head: other  # "user:branch"; not passed
+      page: other
+      perPage: other
+      sort: other
+      state: other
+  list_releases:
+    repository: read
+    arguments: {owner: "{repo.owner}", repo: "{repo.name}"}
+    argument_roles: {owner: owner, repo: repository, fields: content, page: other, perPage: other}
+  list_repository_collaborators:
+    repository: read
+    arguments: {owner: "{repo.owner}", repo: "{repo.name}"}
+    argument_roles: {owner: owner, repo: repository, affiliation: other, page: other, perPage: other}
+  list_tags:
+    repository: read
+    arguments: {owner: "{repo.owner}", repo: "{repo.name}"}
+    argument_roles: {owner: owner, repo: repository, page: other, perPage: other}
+  pull_request_read:
+    repository: read
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      pullNumber: "{fixture.pr_number}"
+      method: get
+    argument_roles:
+      owner: owner
+      repo: repository
+      pullNumber: id
+      method: other
+      after: other
+      page: other
+      perPage: other
+  # No owner or repo argument: on no_target_tools, scoped by the query's repo:
+  # qualifier. Code search needs at least one search term besides qualifiers; a
+  # search with no match is still a valid read.
+  search_code:
+    repository: read
+    arguments:
+      query: "fixture repo:{repo.owner}/{repo.name}"
+    argument_roles: {query: other, fields: content, order: other, page: other, perPage: other, sort: other}
+  # No owner or repo argument: on no_target_tools, scoped by the query's repo:
+  # qualifier ("queries without a scope qualifier match across all of GitHub").
+  search_commits:
+    repository: read
+    arguments:
+      query: "fixture repo:{repo.owner}/{repo.name}"
+    argument_roles: {query: other, order: other, page: other, perPage: other, sort: other}
+  # owner and repo are passed: with both, the server prefixes the query with
+  # repo:owner/repo. The query is natural language (semantic search) and matches the
+  # fixture issue's title.
+  search_issues:
+    repository: read
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      query: read fixture issue
+    argument_roles:
+      owner: owner
+      repo: repository
+      query: other
+      fields: content
+      order: other
+      page: other
+      perPage: other
+      sort: other
+  # owner and repo scope the query as for search_issues; head: matches pull
+  # request #2.
+  search_pull_requests:
+    repository: read
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      query: "head:fixture-branch"
+    argument_roles:
+      owner: owner
+      repo: repository
+      query: other
+      fields: content
+      order: other
+      page: other
+      perPage: other
+      sort: other
+  # On no_target_tools; the repo: qualifier finds exactly the read repository.
+  search_repositories:
+    repository: read
+    arguments:
+      query: "repo:{repo.owner}/{repo.name}"
+    argument_roles: {query: other, minimal_output: other, order: other, page: other, perPage: other, sort: other}
+  # On no_target_tools. The search is scoped to type:user, so the test organization's
+  # name matches no user; an empty result is still a valid read, and the query names
+  # nothing outside the allowlist.
+  search_users:
+    repository: read
+    arguments:
+      query: "{repo.owner}"
+    argument_roles: {query: other, order: other, page: other, perPage: other, sort: other}
+  # method: labels lists the read repository's labels (repo is required for it).
+  ui_get:
+    repository: read
+    arguments:
+      owner: "{repo.owner}"
+      repo: "{repo.name}"
+      method: labels
+    argument_roles: {owner: owner, repo: repository, method: other}
+
+  # --- Skipped ---------------------------------------------------------------------
+  get_teams:
+    status: skipped
+    skip_reason: needs organization permissions the token does not have
+  get_team_members:
+    status: skipped
+    skip_reason: needs organization permissions the token does not have
+  assign_copilot_to_issue:
+    status: skipped
+    skip_reason: starts outside work
+  request_copilot_review:
+    status: skipped
+    skip_reason: starts outside work
+  create_repository:
+    status: skipped
+    skip_reason: acts on the account
+  fork_repository:
+    status: skipped
+    skip_reason: acts on the account
+  add_issue_comment_reaction:
+    status: skipped
+    skip_reason: "round 2: needs a new compared field"
+  add_sub_issue:
+    status: skipped
+    skip_reason: "round 2: needs a new compared field"
+  create_issue:
+    status: skipped
+    skip_reason: "round 2: needs a new compared field"
+  hide_issue_comment:
+    status: skipped
+    skip_reason: "round 2: needs a new compared field"
+  reprioritize_sub_issue:
+    status: skipped
+    skip_reason: "round 2: needs a new compared field"
+  set_issue_fields:
+    status: skipped
+    skip_reason: "round 2: needs a new compared field"
+  unhide_issue_comment:
+    status: skipped
+    skip_reason: "round 2: needs a new compared field"
+  update_issue_milestone:
+    status: skipped
+    skip_reason: "round 2: needs a new compared field"
+  update_issue_type:
+    status: skipped
+    skip_reason: "round 2: needs a new compared field"

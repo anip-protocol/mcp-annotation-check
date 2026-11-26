@@ -20,7 +20,7 @@ from mcp_annotation_check.redact import redact
 TOKEN_ENV = "MCP_ANNOTATION_CHECK_GITHUB_TOKEN"
 SERVER_TOKEN_ENV = "GITHUB_PERSONAL_ACCESS_TOKEN"
 # The docker CLI's own settings: passed to `docker run` when set, so it talks to the
-# same daemon that `image_digest` (which inherits the whole environment) inspected.
+# same daemon that `image_digest` inspects (it gets the same variables).
 DOCKER_ENV = (
     "DOCKER_HOST",
     "DOCKER_CONTEXT",
@@ -28,6 +28,11 @@ DOCKER_ENV = (
     "DOCKER_CERT_PATH",
     "DOCKER_TLS_VERIFY",
 )
+
+
+def _docker_env() -> dict[str, str]:
+    """PATH, HOME and the DOCKER_* settings, when set: never the token."""
+    return {k: os.environ[k] for k in ("PATH", "HOME", *DOCKER_ENV) if k in os.environ}
 
 
 def server_params(
@@ -44,10 +49,7 @@ def server_params(
         args.append(f"--toolsets={','.join(toolsets)}")
     if features:
         args.append(f"--features={','.join(features)}")
-    env = {SERVER_TOKEN_ENV: token}
-    for key in ("PATH", "HOME", *DOCKER_ENV):
-        if key in os.environ:
-            env[key] = os.environ[key]
+    env = {SERVER_TOKEN_ENV: token, **_docker_env()}
     return StdioServerParameters(command="docker", args=args, env=env)
 
 
@@ -57,6 +59,7 @@ def _inspect(image: str) -> str:
         capture_output=True,
         text=True,
         check=True,
+        env=_docker_env(),
     )
     return out.stdout.strip()
 
@@ -64,15 +67,21 @@ def _inspect(image: str) -> str:
 def image_digest(image: str) -> str:
     """The image's first repo digest, e.g. `ghcr.io/...@sha256:...`.
 
-    An image that is not local is pulled once (`docker pull` inherits the environment,
-    DOCKER_* included, and never receives the token), then inspected again.
+    An image that is not local is pulled once (`docker image inspect` and `docker pull` run
+    with PATH, HOME and DOCKER_* only, never the token), then inspected again.
     """
     try:
         return _inspect(image)
     except subprocess.CalledProcessError:
         pass
     try:
-        subprocess.run(["docker", "pull", image], capture_output=True, text=True, check=True)
+        subprocess.run(
+            ["docker", "pull", image],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=_docker_env(),
+        )
     except subprocess.CalledProcessError as error:
         secrets = [t for t in (os.environ.get(TOKEN_ENV),) if t]
         stderr = error.stderr if isinstance(error.stderr, str) else ""

@@ -120,7 +120,7 @@ tools:
     argument_roles: {owner: owner, repo: repository, issue_number: id, labels: content}
 ```
 
-If a tool's repository argument takes `owner/name`, declare it `full_name`. An ID value must be the whole placeholder (`"{fixture.issue_number}"`, not `"7"` or `"x{fixture.n}"`), so every ID names an object the harness created; a read-repository entry with no fixture takes the values from the pack's `read_fixtures`. A pack that breaks any of these rules does not load. Skipped entries need no roles.
+If a tool's repository argument takes `owner/name`, declare it `full_name`. An ID value must be the whole placeholder (`"{fixture.issue_number}"`, not `"7"` or `"x{fixture.n}"`), so every ID comes from a fixture or from the pack's `read_fixtures`; a read-repository entry with no fixture takes the values from the pack's `read_fixtures`. A read-repository entry may not name a fixture or `custom_setup`, and an argument named like an ID (ending in `id` or `number`) may not be declared `other` or `content`. A pack that breaks any of these rules does not load. Skipped entries need no roles.
 
 An enabled entry must name a repository through an `owner`, `repository`, `full_name` or `repository_id` argument, unless the pack puts it on one of two lists:
 

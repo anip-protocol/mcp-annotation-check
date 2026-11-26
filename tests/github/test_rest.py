@@ -135,7 +135,10 @@ async def test_shakedown_client_refuses_all_writes(method):
     assert [r.method for r in recorder.requests] == ["GET"]
 
 
-@pytest.mark.parametrize("fixture", ["issue_with_labels", "issue_with_comment", "open_pr"])
+@pytest.mark.parametrize(
+    "fixture",
+    ["issue_with_labels", "issue_with_comment", "issue_with_assignee", "open_pr"],
+)
 async def test_reader_fixture_lifecycle_passes_the_guard(fixture):
     from mcp_annotation_check.github.reader import GitHubReader
     from mcp_annotation_check.pack import ToolEntry
@@ -149,8 +152,10 @@ async def test_reader_fixture_lifecycle_passes_the_guard(fixture):
             return httpx.Response(404, json={})
         if path.endswith("/pulls"):
             return httpx.Response(201, json={"number": 2})
+        if path == "/user":
+            return httpx.Response(200, json={"login": "me"})
         if path.endswith("/issues"):
-            return httpx.Response(201, json={"number": 1})
+            return httpx.Response(201, json={"number": 1, "assignees": [{"login": "me"}]})
         if path.endswith("/comments"):
             return httpx.Response(201, json={"id": 3})
         return httpx.Response(200, json={"default_branch": "main", "object": {"sha": "s"}})
@@ -164,3 +169,35 @@ async def test_reader_fixture_lifecycle_passes_the_guard(fixture):
     await rest.aclose()
     writes = [(m, p) for m, p in sent if m != "GET"]
     assert writes and all(p.startswith(f"/repos/{WRITE}/") for _, p in writes)
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+@pytest.mark.parametrize(
+    "tail",
+    ["forks", "transfer", "generate", "hooks", "collaborators/x", "keys", "contents",
+     "git/trees", "git", "issuesx", "labelsx/y", "pullsx"],
+)  # fmt: skip
+async def test_write_outside_allowed_prefixes_refused(method, tail):
+    recorder = Recorder()
+    rest = rest_for_run(TOKEN, _pack(), transport=recorder.transport)
+    with pytest.raises(RestRefused):
+        await write(rest, method, f"/repos/{WRITE}/{tail}")
+    await rest.aclose()
+    assert recorder.requests == []
+
+
+@pytest.mark.parametrize(
+    ("method", "tail"),
+    [
+        ("POST", "issues"), ("PATCH", "issues/1"), ("POST", "issues/1/labels"),
+        ("POST", "labels"), ("DELETE", "labels/x"), ("POST", "git/refs"),
+        ("DELETE", "git/refs/heads/b"), ("PUT", "contents/a/b.txt"), ("POST", "pulls"),
+        ("PATCH", "pulls/2"), ("POST", "milestones"),
+    ],
+)  # fmt: skip
+async def test_write_inside_allowed_prefixes_sent(method, tail):
+    recorder = Recorder()
+    rest = rest_for_run(TOKEN, _pack(), transport=recorder.transport)
+    await write(rest, method, f"/repos/{WRITE}/{tail}")
+    await rest.aclose()
+    assert len(recorder.requests) == 1
