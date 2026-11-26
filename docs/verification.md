@@ -98,3 +98,26 @@ For `/user/orgs` and `/user/repos?affiliation=owner` (preflight step 4):
 
 _Pending. Record here: the date, which result above was seen for each endpoint, and the
 printed lines._
+
+## Pending: GitHub server launch flags
+
+Not yet run: it needs the owner's token and test organization, which do not exist yet.
+No Docker image was pulled or run while writing the launcher.
+
+What will be run, once they exist:
+
+```
+export MCP_ANNOTATION_CHECK_GITHUB_TOKEN=<fine-grained token>
+mcp-annotation-check list-tools --image ghcr.io/github/github-mcp-server:<latest> \
+  --toolsets default --out out/tools-latest.json
+mcp-annotation-check list-tools --image ghcr.io/github/github-mcp-server:<unfixed tag> \
+  --toolsets default --features issues_granular --out out/tools-unfixed.json
+```
+
+Expected: the second list contains `update_issue_labels` with `destructiveHint: false`,
+and the first is the default tool set. Also compare `docker run ... --help` with the
+flags `server_params` renders (`stdio --toolsets=<a,b> [--features=<x,y>]`); if the
+syntax differs, fix `server_params`.
+
+To record here: both image tags, their digests (`image_digest`), the tool count of each
+list, the date, and whether the flag syntax matched `--help`.
