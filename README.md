@@ -97,7 +97,7 @@ A non-destructive check over a field whose elements are whole objects (an issue'
 
 "No change observed in ..." describes the fields and scope the harness compared, not proof that nothing changed. Changes outside the compared fields are not observed.
 
-Read-only violations are private. They appear only in `private-findings.md`; the public `report.md` and `report.json` do not name the tool or show its evidence, and say only how many results were withheld.
+Read-only violations are private. They appear only in `private-findings.md`; the public `report.md` and `report.json` do not name the tool or show its evidence, and say only how many results were withheld. The header still lists every tool the server offers, so the withheld tool can be inferred by elimination: whenever anything is withheld, both public files carry a "Do not publish until the withheld findings are disclosed" banner (`"publish_blocked": true` and `"publish_notice"` in `report.json`).
 
 The report header records the server info, image and digest, toolsets and features, pack version and date. **Findings apply only to the image and configuration in the report header.**
 

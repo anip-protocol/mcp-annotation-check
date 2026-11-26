@@ -103,6 +103,7 @@ def test_cli_self_test_writes_reports(tmp_path, capsys):
     out = capsys.readouterr().out
     assert str(tmp_path / "report.md") in out
     assert "finding" in out
+    assert "Do not publish until the withheld findings are disclosed" in out
     for name in ("report.md", "report.json", "private-findings.md"):
         assert (tmp_path / name).is_file()
 
@@ -121,3 +122,28 @@ def test_unjudged_verdict_diff_is_marked_not_judged():
     text = _diff_text(v)
     assert "@@ issue.comments @@ not judged" in text
     assert "additive" not in text
+
+
+async def test_withheld_results_block_publication(tmp_path):
+    md, data, _ = await written(tmp_path)
+    notice = "Do not publish until the withheld findings are disclosed"
+    assert data["publish_blocked"] is True
+    assert data["publish_notice"].startswith(notice)
+    # prominent: the banner comes before the run header
+    assert notice in md
+    assert md.index(notice) < md.index("## Run")
+    assert md.splitlines()[2].startswith(f"> **{notice}")
+
+
+async def test_nothing_withheld_has_no_publish_banner(tmp_path):
+    pack = load_pack(FAKE_PACK)
+    pack = with_entries(
+        pack,
+        peek_and_touch=replace(
+            pack.entries["peek_and_touch"], status="skipped", skip_reason="not today"
+        ),
+    )
+    md, data, _ = await written(tmp_path, pack)
+    assert data["publish_blocked"] is False
+    assert data["publish_notice"] is None
+    assert "Do not publish" not in md

@@ -19,7 +19,7 @@ from mcp_annotation_check.github.rest import GitHubRest
 from mcp_annotation_check.github.safety import make_before_call, preflight
 from mcp_annotation_check.pack import load_pack
 from mcp_annotation_check.redact import redact
-from mcp_annotation_check.report import WITHHELD, ToolResult, write_reports
+from mcp_annotation_check.report import PUBLISH_BLOCKED, WITHHELD, ToolResult, write_reports
 from mcp_annotation_check.runner import list_all_tools, run
 
 FAKE_PACK = Path(__file__).resolve().parents[2] / "packs" / "fake.yaml"
@@ -62,6 +62,7 @@ def _summary(results: list[ToolResult]) -> list[str]:
         lines.append(f"  {r.tool}: {r.outcome.value}" + (f" ({reason})" if reason else ""))
     if withheld:
         lines.append(f"  {withheld} {WITHHELD}")
+        lines.append(PUBLISH_BLOCKED)
     return lines
 
 

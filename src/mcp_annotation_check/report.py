@@ -2,7 +2,9 @@
 
 Read-only violations are private: they go only to private-findings.md. The public
 reports (JSON and Markdown) neither name the tool nor show its evidence; they say
-only how many results were withheld.
+only how many results were withheld. Because the header still carries the full
+tools/list, the withheld tool can be inferred by elimination, so whenever anything
+is withheld both public files also carry a "do not publish" banner (ruling R18).
 """
 
 import dataclasses
@@ -20,6 +22,10 @@ STATEMENT = "Findings apply to this image and configuration only."
 WITHHELD = "withheld: see private-findings.md"
 PRIVATE_FLAG = "Report privately to the server's maintainers first."
 NOT_OBSERVED = "Changes outside the compared fields are not observed."
+PUBLISH_BLOCKED = (
+    "Do not publish until the withheld findings are disclosed. A reader can infer the "
+    "withheld tool from this report (the full tools/list is in the header)."
+)
 
 _HINT_NAMES = {
     "read_only": "readOnlyHint",
@@ -120,6 +126,8 @@ def write_reports(header: RunHeader, results: list[ToolResult], out_dir: Path) -
 def _json_report(header: RunHeader, public: list[ToolResult], withheld: int) -> str:
     data = {
         "statement": STATEMENT,
+        "publish_blocked": withheld > 0,
+        "publish_notice": PUBLISH_BLOCKED if withheld else None,
         "header": jsonable(header),
         "coverage": coverage(public),
         "withheld": withheld,
@@ -132,7 +140,10 @@ def _json_report(header: RunHeader, public: list[ToolResult], withheld: int) -> 
 
 
 def _markdown_report(header: RunHeader, public: list[ToolResult], withheld: int) -> str:
-    lines = ["# MCP annotation check report", "", STATEMENT, "", "## Run", ""]
+    lines = ["# MCP annotation check report", ""]
+    if withheld:
+        lines += [f"> **{PUBLISH_BLOCKED}**", ""]
+    lines += [STATEMENT, "", "## Run", ""]
     lines += _header_table(header)
     lines += ["", "## Coverage", "", "| Outcome | Tools |", "|---|---|"]
     lines += [f"| {name} | {count} |" for name, count in coverage(public).items()]
