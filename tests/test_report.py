@@ -4,6 +4,7 @@ from dataclasses import replace
 from mcp_annotation_check.cli import main
 from mcp_annotation_check.pack import load_pack
 from mcp_annotation_check.report import write_reports
+from mcp_annotation_check.rules import Outcome
 from support import FAKE_PACK, run_fake, with_entries
 
 
@@ -222,14 +223,32 @@ def test_observation_under_unjudged_is_counted():
         "pass": 1,
     }
 
-    public = [r for r in [a, b, c] if not r.private]
-    assert verdict_counts(public)["finding"] == 1
+
+
+async def test_withheld_tool_is_not_in_the_public_verdict_counts(tmp_path):
+    header, results = await run_fake()
+    template = next(r for r in results if r.verdicts)
+    finding = replace(template, verdicts=[replace(template.verdicts[0], outcome=Outcome.FINDING)])
+    public = replace(finding, tool="public_tool", outcome=Outcome.FINDING, private=False)
+    secret = replace(finding, tool="secret_tool", outcome=Outcome.FINDING, private=True)
+    write_reports(header, [public, secret], tmp_path)
+    data = json.loads((tmp_path / "report.json").read_text())
+    md = (tmp_path / "report.md").read_text()
+    assert data["verdict_counts"]["finding"] == 1
+    assert data["withheld"] == 1
+    assert "| finding | 1 |" in md
+    assert "secret_tool" not in md
+
+
+EXPECTED_COUNTS = {"finding": 3, "observation": 1, "unjudged": 0, "pass": 4}
 
 
 async def test_report_files_carry_verdict_counts(tmp_path):
     md, data, _ = await written(tmp_path)
     assert set(data["verdict_counts"]) == {"finding", "observation", "unjudged", "pass"}
-    assert data["verdict_counts"]["finding"] >= 1
+    assert data["verdict_counts"] == EXPECTED_COUNTS
+    for name, count in EXPECTED_COUNTS.items():
+        assert f"| {name} | {count} |" in md.split("Tools with at least one verdict")[1]
     assert "Tools with at least one verdict of each kind" in md
     assert md.index("## Coverage") < md.index("Tools with at least one verdict") < md.index("## Tools")
 

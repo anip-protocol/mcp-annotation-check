@@ -30,6 +30,11 @@ ROLES = {
         "issue_number": "id", "gist_id": "id", "widget_id": "id", "repo_id": "id",
         "pull_number": "other", "body": "content",
     },
+    "search_other": {
+        "query": "other", "owner": "other", "repo": "content", "issue_number": "other",
+        "page": "other", "perPage": "other", "sort": "other", "order": "other",
+        "type": "other", "q": "other", "minimal_output": "other",
+    },
     "search_code": {
         "query": "other", "payload": "content", "owner": "owner", "repo": "repository",
         "full_name": "full_name", "repository_id": "repository_id", "issue_number": "id",
@@ -46,7 +51,7 @@ def pack(**overrides) -> Pack:
         standard_read_only_fields=[],
         entries={t: ToolEntry(tool=t, argument_roles=r) for t, r in ROLES.items()},
         id_only_write_tools=["update_by_id"],
-        no_target_tools=["search_code"],
+        no_target_tools=["search_code", "search_other"],
     )
     values.update(overrides)
     return Pack(**values)
@@ -578,6 +583,30 @@ async def test_no_target_tool_with_a_non_content_argument_refused(arguments):
     gh = GitHub({"/repositories/5": {"full_name": WRITE, "owner": {"login": ORG}}})
     with pytest.raises(SafetyRefusal, match="no_target_tools"):
         await check(arguments, "search_code", gh=gh)
+    assert gh.requests == []
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"query": "x", "owner": ORG},
+        {"query": "x", "repo": "write-repo"},
+        {"query": "x", "issue_number": 7},
+    ],
+)
+async def test_no_target_tool_argument_named_like_a_target_refused_whatever_its_role(arguments):
+    gh = GitHub()
+    with pytest.raises(SafetyRefusal, match="no_target_tools"):
+        await check(arguments, "search_other", gh=gh)
+    assert gh.requests == []
+
+
+async def test_no_target_tool_ordinary_search_arguments_allowed():
+    arguments = {
+        "query": "x", "q": "y", "sort": "created", "order": "desc", "page": 1, "perPage": 5,
+        "type": "issue", "minimal_output": True,
+    }
+    gh = await check(arguments, "search_other")
     assert gh.requests == []
 
 

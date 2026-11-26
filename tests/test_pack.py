@@ -534,13 +534,41 @@ def test_id_only_tool_without_id_fails_validation(tmp_path):
         assert validate_pack(pack, [tool("t1", "owner", "repo", "gist_id")]) == []
 
 
-def test_no_target_name_without_an_enabled_entry_is_a_problem(tmp_path):
+def test_no_target_name_needs_a_pack_entry_enabled_or_skipped(tmp_path):
     tools = "  t1:\n    status: skipped\n    skip_reason: later\n  t2:\n    status: enabled\n"
     pack = load_pack(write_pack(tmp_path, tools, extra="no_target_tools: [t1, t2, t3]\n"))
     assert validate_pack(pack, [tool("t1"), tool("t2")]) == [
-        "t1: on no_target_tools, but has no enabled pack entry",
-        "t3: on no_target_tools, but has no enabled pack entry",
+        "t3: on no_target_tools, but has no pack entry",
     ]
+
+
+@pytest.mark.parametrize(
+    "arg,role",
+    [("owner", "other"), ("repo", "content"), ("issue_number", "other"), ("repositoryId", "other")],
+)
+def test_no_target_tool_argument_named_like_a_target_is_a_problem_whatever_its_role(
+    tmp_path, arg, role
+):
+    body = f"  t1:\n    argument_roles: {{query: other, {arg}: {role}}}\n"
+    pack = load_pack(write_pack(tmp_path, body, extra="no_target_tools: [t1]\n"))
+    problems = validate_pack(pack, [tool("t1", "query", arg)])
+    assert any(f"argument {arg!r}" in p and "no_target_tools" in p for p in problems), problems
+
+
+def test_no_target_tool_ordinary_search_arguments_stay_valid(tmp_path):
+    names = ["query", "q", "sort", "order", "page", "perPage", "type", "minimal_output"]
+    roles = ", ".join(f"{n}: other" for n in names)
+    body = f"  t1:\n    argument_roles: {{{roles}}}\n"
+    pack = load_pack(write_pack(tmp_path, body, extra="no_target_tools: [t1]\n"))
+    assert validate_pack(pack, [tool("t1", *names)]) == []
+
+
+@pytest.mark.parametrize("key", ["no_target_tools", "id_only_write_tools"])
+@pytest.mark.parametrize("value", ["5", "{get_issue: 1}", "[123]", "get_issue", "[[a]]"])
+def test_tool_name_lists_must_be_lists_of_strings(tmp_path, key, value):
+    p = write_pack(tmp_path, "  t1:\n    status: enabled\n", extra=f"{key}: {value}\n")
+    with pytest.raises(PackError, match=key):
+        load_pack(p)
 
 
 def test_no_target_does_not_depend_on_annotations(tmp_path):

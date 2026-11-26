@@ -306,15 +306,21 @@ def validate_pack(pack: Pack, tools: list[Tool]) -> list[str]:
             if name in id_only:
                 problems.append(f"{name}: on both no_target_tools and id_only_write_tools")
             problems += [
+                f"{name}: on no_target_tools, so argument {p!r} may not be named like an "
+                "owner, repository or ID, whatever its role"
+                for p in properties
+                if looks_like_id(p) or may_name_owner_or_repository(p)
+            ]
+            problems += [
                 f"{name}: on no_target_tools, so argument {arg!r} must be content or other, "
                 f"not {role!r}"
                 for arg, role in roles.items()
                 if role not in NO_TARGET_ROLES
             ]
     problems += [
-        f"{name}: on no_target_tools, but has no enabled pack entry"
+        f"{name}: on no_target_tools, but has no pack entry"
         for name in pack.no_target_tools
-        if name not in pack.entries or pack.entries[name].status != "enabled"
+        if name not in pack.entries
     ]
     return problems
 
@@ -338,6 +344,14 @@ def pack_warnings(pack: Pack) -> list[str]:
                     f"but is declared {role!r}; check it by hand"
                 )
     return warnings
+
+
+def _tool_names(raw: Any, key: str) -> list[str]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not all(isinstance(n, str) for n in raw):
+        raise PackError(f"{key} must be a list of tool names (strings)")
+    return list(raw)
 
 
 def _allowlist(raw: Any) -> list[str]:
@@ -385,8 +399,8 @@ def load_pack(path: Path) -> Pack:
         repositories=_repositories(raw.get("repositories")),
         standard_read_only_fields=_fields(raw.get("standard_read_only_fields"), "pack"),
         entries={name: _entry(name, body) for name, body in tools.items()},
-        id_only_write_tools=list(raw.get("id_only_write_tools") or []),
-        no_target_tools=list(raw.get("no_target_tools") or []),
+        id_only_write_tools=_tool_names(raw.get("id_only_write_tools"), "id_only_write_tools"),
+        no_target_tools=_tool_names(raw.get("no_target_tools"), "no_target_tools"),
         read_fixtures=read_fixtures,
     )
 

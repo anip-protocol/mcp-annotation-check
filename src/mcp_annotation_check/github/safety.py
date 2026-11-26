@@ -104,11 +104,12 @@ from mcp_annotation_check.argnames import (
     REPO_ID_KEYS,
     REPO_KEYS,
     looks_like_id,
+    may_name_owner_or_repository,
     norm,
     words,
 )
 from mcp_annotation_check.github.rest import GitHubRest
-from mcp_annotation_check.pack import NO_TARGET_ROLES, Pack, PackError, check_content
+from mcp_annotation_check.pack import ID_ROLES, NO_TARGET_ROLES, Pack, PackError, check_content
 from mcp_annotation_check.redact import redact
 
 CLASSIC_PREFIXES = ("ghp_", "gho_", "ghu_", "ghs_")
@@ -132,7 +133,6 @@ _SCOPED_IDS = {
     "pullnumber": ("/repos/{repo}/pulls/{id}",),
     "commentid": ("/repos/{repo}/issues/comments/{id}", "/repos/{repo}/pulls/comments/{id}"),
 }
-_ID_ROLES = ("id", "repository_id")
 _SCALAR = (str, int, float, bool, type(None))
 
 
@@ -427,6 +427,11 @@ async def _resolve(
 def _no_target_declarations(tool: str, arguments: dict, roles: dict[str, str]) -> None:
     """A no-target tool may pass only content and other arguments."""
     for key in arguments:
+        if looks_like_id(key) or may_name_owner_or_repository(key):
+            raise SafetyRefusal(
+                f"{tool}: on no_target_tools, so argument {key!r} may not be named like an "
+                "owner, repository or ID, whatever its role; refusing"
+            )
         if roles[key] not in NO_TARGET_ROLES:
             raise SafetyRefusal(
                 f"{tool}: on no_target_tools, so argument {key!r} must be content or other, "
@@ -438,12 +443,12 @@ def _id_only_declarations(tool: str, arguments: dict, roles: dict[str, str]) -> 
     """Before any REST lookup: an ID-only tool's IDs must all be declared as IDs."""
     for key in arguments:
         role = roles[key]
-        if role not in _ID_ROLES and looks_like_id(key):
+        if role not in ID_ROLES and looks_like_id(key):
             raise SafetyRefusal(
                 f"{tool}: {key!r} looks like an ID of an ID-only write tool but is declared "
                 f"{role!r}; refusing"
             )
-    if not any(roles[k] in _ID_ROLES for k in arguments):
+    if not any(roles[k] in ID_ROLES for k in arguments):
         raise SafetyRefusal(f"{tool}: an ID-only write tool with no ID argument to resolve")
 
 
