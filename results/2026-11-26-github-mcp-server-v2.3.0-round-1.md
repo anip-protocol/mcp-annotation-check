@@ -18,6 +18,8 @@ Every result below says "Review: unreviewed" because the harness never marks its
 
 A pass means no counterexample on these fixtures, not proof. The read-only comparison covers the fields listed under "Read-only comparison set", not releases, milestones or collaborators.
 
+The same results with one row per claim: [results by claim](2026-11-26-github-mcp-server-v2.3.0-round-1-by-claim.md).
+
 ## Run
 
 | Field | Value |
