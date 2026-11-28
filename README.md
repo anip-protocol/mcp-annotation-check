@@ -22,7 +22,7 @@ First sweep, 26 November 2026: GitHub's MCP server v2.3.0 (`ghcr.io/github/githu
 
 Not tested yet: two team tools (they need organization permissions), and nine `destructiveHint: false` tools whose effects the harness does not compare yet (new issues, comment reactions, milestones, sub-issues, hidden comments, issue fields and types). A pass means no counterexample on these fixtures, not proof, and the results apply to this image and configuration only.
 
-Full report, with every call and before/after diff: [results/2026-11-26-github-mcp-server-v2.3.0-round-1.md](results/2026-11-26-github-mcp-server-v2.3.0-round-1.md). Posted on [github-mcp-server#3760](https://github.com/github/github-mcp-server/issues/3760#issuecomment-7184390137) and [#10](https://github.com/modelcontextprotocol/experimental-ext-tool-annotations/issues/10#issuecomment-7186607131).
+Full report, with every call and before/after diff: [results/2026-11-26-github-mcp-server-v2.3.0-round-1.md](results/2026-11-26-github-mcp-server-v2.3.0-round-1.md). One row per claim: [results/2026-11-26-github-mcp-server-v2.3.0-round-1-by-claim.md](results/2026-11-26-github-mcp-server-v2.3.0-round-1-by-claim.md). Posted on [github-mcp-server#3760](https://github.com/github/github-mcp-server/issues/3760#issuecomment-7184390137) and [#10](https://github.com/modelcontextprotocol/experimental-ext-tool-annotations/issues/10#issuecomment-7186607131).
 
 ## Status
 
